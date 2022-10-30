@@ -67,6 +67,29 @@ def get_threecommas_blacklist(logger, api):
     return newblacklist
 
 
+def update_threecommas_blacklist(logger, api, newpairs):
+    """Update the pair blacklist from 3Commas."""
+
+    error, data = api.request(
+        entity="bots",
+        action="update_pairs_black_list",
+        payload={
+            "pairs": newpairs,
+        }
+    )
+    if data:
+        logger.info(
+            "Updated 3Commas pairs blacklist OK (%s pairs)" % len(newpairs)
+        )
+    else:
+        if "msg" in error:
+            logger.error(
+                "Updating 3Commas pairs blacklist failed with error: %s" % error["msg"]
+            )
+        else:
+            logger.error("Updating 3Commas pairs blacklist failed")
+
+
 def get_threecommas_btcusd(logger, api):
     """Get current USDT_BTC value to calculate BTC volume24h in USDT."""
 
