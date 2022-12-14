@@ -106,6 +106,7 @@ def open_shared_db():
             "base STRING, "
             "coin STRING, "
             "last_updated INT, "
+            "whitelisted BIT, "
             "PRIMARY KEY(base, coin)"
             ")"
         )
@@ -165,6 +166,16 @@ def open_mc_db():
         logger.info("Database tables created successfully")
 
     return dbconnection
+
+
+def upgrade_shared_db():
+    """Upgrade database if required."""
+    try:
+        cursor.execute("ALTER TABLE pairs ADD COLUMN whitelisted BIT DEFAULT 0")
+
+        logger.info("Database schema upgraded")
+    except sqlite3.OperationalError:
+        logger.debug("Database schema is up-to-date")
 
 
 def has_pair(base, coin):
@@ -273,6 +284,26 @@ def update_values(table, base, coin, data):
 
     shareddb.execute(query)
     # shareddb.commit() left out on purpose
+
+
+def update_whitelist(whitelist):
+    """Process the whitelist pairs (if any)"""
+
+    # Reset current whitelist data for pairs which have been removed
+    query = f"UPDATE pairs SET whitelisted = {0}"
+    shareddb.execute(query)
+
+    data = {}
+    data["whitelisted"] = 1
+
+    # Add whitelist data
+    for pair in whitelist:
+        base = pair.split("_")[0]
+        coin = pair.split("_")[1]
+
+        update_values("pairs", base, coin, data)
+
+    shareddb.commit()
 
 
 def process_cmc_section(section_id):
@@ -598,6 +629,29 @@ def reset_database_data():
     shareddb.commit()
 
 
+def load_whitelist(whitelist_file):
+    """Return whitelist data to be used."""
+
+    whitelist = []
+
+    if whitelist_file:
+        try:
+            with open(whitelist_file, "r") as file:
+                whitelist = file.read().splitlines()
+            if whitelist:
+                logger.info(
+                    "Reading local whitelist file '%s' OK (%s pairs)"
+                    % (whitelist_file, len(whitelist))
+                )
+        except FileNotFoundError:
+            logger.error(
+                "Reading local whitelist file '%s' failed with error: File not found"
+                % whitelist_file
+            )
+
+    return whitelist
+
+
 # Start application
 program = Path(__file__).stem
 
@@ -608,6 +662,9 @@ parser.add_argument(
 )
 parser.add_argument(
     "-s", "--sharedir", help="directory to use for shared files", type=str
+)
+parser.add_argument(
+    "-w", "--whitelist", help="local whitelist with pairs", type=str
 )
 
 args = parser.parse_args()
@@ -622,6 +679,12 @@ if args.sharedir:
 else:
     print("This script requires the sharedir to be used (-s option)!")
     sys.exit(0)
+
+# pylint: disable-msg=C0103
+if args.whitelist:
+    whitelistfile = f"{datadir}/{args.whitelist}"
+else:
+    whitelistfile = None
 
 # Create or load configuration file
 config = load_config()
@@ -670,6 +733,9 @@ cursor = db.cursor()
 # Initialize or open the shared database
 shareddb = open_shared_db()
 sharedcursor = shareddb.cursor()
+
+# Upgrade the database if required
+upgrade_shared_db()
 
 # Storage of data for each section (if applicable)
 sectionstorage = {}
@@ -745,6 +811,9 @@ while True:
                 f"Section '{section}' not processed (prefix 'cmc_' missing)!",
                 False
             )
+
+    # Update whitelist
+    update_whitelist(load_whitelist(whitelistfile))
 
     # Inital update executed, from here on rely on the section timeinterval
     forceupdate = False
