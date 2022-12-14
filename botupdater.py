@@ -51,6 +51,7 @@ def load_config():
         "allowmaxdealchange": True,
         "allowbotstopstart": True,
         "base": "BTC",
+        "whitelisted": False,
         "cmc-rank": [1, 200],
         "altrank": [],
         "galaxyscore": [],
@@ -69,6 +70,15 @@ def load_config():
 
 def upgrade_config(cfg):
     """Upgrade config file if needed."""
+
+    for cfgsection in cfg.sections():
+        if cfgsection.startswith("bu_") and not cfg.has_option(cfgsection, "whitelisted"):
+            cfg.set(cfgsection, "whitelisted", False)
+
+            with open(f"{datadir}/{program}.ini", "w+") as cfgfile:
+                cfg.write(cfgfile)
+
+            logger.info("Upgraded section %s to have 'whitelisted' option" % cfgsection)
 
     return cfg
 
@@ -181,6 +191,7 @@ def process_bu_section(section_id):
         return botsupdated
 
     filteroptions = {}
+    filteroptions["whitelisted"] = config.getboolean(section_id, "whitelisted")
     filteroptions["cmcrank"] = json.loads(config.get(section_id, "cmc-rank"))
     filteroptions["altrank"] = json.loads(config.get(section_id, "altrank"))
     filteroptions["galaxyscore"] = json.loads(config.get(section_id, "galaxyscore"))
@@ -410,6 +421,10 @@ def get_coins_from_market_data(base, filteroptions):
 
     # Specify the base
     query += f"WHERE pairs.base = '{base}' "
+
+    # Specificy whitelisted
+    if filteroptions["whitelisted"]:
+        query += f"AND pairs.whitelisted = {1} "
 
     # Specify cmc-rank
     if filteroptions["cmcrank"]:
