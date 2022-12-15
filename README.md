@@ -267,7 +267,7 @@ They also have some command-line options:
 
 ```
 ./script.py -h
-usage: script.py [-h] [-d DATADIR] [-s SHAREDIR] [-b BLACKLIST]
+usage: script.py [-h] [-d DATADIR] [-s SHAREDIR] [-b BLACKLIST] [-w WHITELIST]
 
 Cyberjunky's 3Commas bot helper.
 
@@ -279,6 +279,8 @@ optional arguments:
                         directory to use for shared files between scripts
   -b BLACKLIST, --blacklist BLACKLIST
                         local blacklist to use instead of 3Commas's
+  -w WHITELIST, --whitelist WHITELIST
+                        local whitelist to use
 ```
 
 The blacklist file layout is one pair per line.
