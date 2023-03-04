@@ -63,6 +63,7 @@ def load_config():
 
     cfg["smarttrade"] = {
         "channel-names": ["Channel 1", "Channel 2"],
+        "account-id": 123456789,
         "amount-usdt": 100.0,
         "amount-btc": 0.001,
     }
@@ -87,7 +88,7 @@ def load_config():
         "usdt-botids": [12345, 67890],
     }
 
-    with open(f"{datadir}/{program}.ini", "w") as cfgfile:
+    with open(f"{datadir}/{program}.ini", "w", encoding = "utf-8") as cfgfile:
         cfg.write(cfgfile)
 
     return None
@@ -99,11 +100,12 @@ def upgrade_config(thelogger, cfg):
     if not cfg.has_section("smarttrade"):
         cfg["smarttrade"] = {
             "channel-names": ["Channel 1", "Channel 2"],
+            "account-id": 123456789,
             "amount-usdt": 100.0,
             "amount-btc": 0.001,
         }
 
-        with open(f"{datadir}/{program}.ini", "w+") as cfgfile:
+        with open(f"{datadir}/{program}.ini", "w+", encoding = "utf-8") as cfgfile:
             cfg.write(cfgfile)
 
         thelogger.info("Upgraded the configuration file (added smarttrade section)")
@@ -114,7 +116,7 @@ def upgrade_config(thelogger, cfg):
 async def handle_custom_event(event):
     """Handle the received Telegram event"""
 
-    logger.debug(
+    logger.info(
         "Received custom message '%s'"
         % (event.message.text.replace("\n", " - "))
     )
@@ -136,39 +138,39 @@ async def handle_custom_event(event):
         if trade == "LONG" and len(trigger) == 4 and trigger[3] == "CLOSE":
             trade = "CLOSE"
     except IndexError:
-        logger.debug("Invalid trigger message format!")
+        logger.error("Invalid trigger message format!")
         return
 
     if exchange.lower() not in ("binance", "ftx", "kucoin"):
-        logger.debug(
+        logger.warning(
             f"Exchange '{exchange}' is not yet supported."
         )
         return
 
     if trade not in ('LONG', 'CLOSE'):
-        logger.debug(f"Trade type '{trade}' is not supported yet!")
+        logger.warning(f"Trade type '{trade}' is not supported yet!")
         return
 
     if base == "USDT":
         botids = json.loads(config.get("custom", "usdt-botids"))
         if len(botids) == 0:
-            logger.debug(
-                "No valid usdt-botids configured for '%s', disabled" % base
+            logger.warning(
+                f"No valid usdt-botids configured for '{base}', disabled"
             )
             return
     elif base == "BTC":
         botids = json.loads(config.get("custom", "btc-botids"))
         if len(botids) == 0:
-            logger.debug("No valid btc-botids configured for '%s', disabled" % base)
+            logger.warning(f"No valid btc-botids configured for '{base}', disabled")
             return
     else:
         logger.error(
-            "Error the base of pair '%s' being '%s' is not supported yet!" % (pair, base)
+            f"Error the base of pair '{pair}' being '{base}' is not supported yet!"
         )
         return
 
     if len(botids) == 0:
-        logger.debug(
+        logger.warning(
             f"{base}_{coin}: no valid botids configured for base '{base}'."
         )
         return
@@ -186,14 +188,14 @@ async def handle_telegram_smarttrade_event(source, event):
     data = event.raw_text.splitlines()
 
     try:
-        searchwords = ["Targets", "Target 1", "TP1", "SL"]
+        searchwords = ["Targets", "Target 1", "TP1", "SL", "Buy Between"]
         #if "Targets" in event.message.text:
         if any(word in event.message.text for word in searchwords):
-            logger.debug(f"Received {source} message: {data}", True)
+            logger.info(f"Received {source} message: {data}", True)
 
             parse_smarttrade_event(source, data)
     except Exception as exception:
-        logger.debug(f"Exception occured: {exception}")
+        logger.error(f"Exception occured: {exception}")
         return
 
     return
@@ -214,10 +216,12 @@ def parse_smarttrade_event(source, event_data):
     for event_line in event_data:
         if "/USDT" in event_line or "/BTC" in event_line or "#" in event_line:
             pair = parse_smarttrade_pair(event_line)
-        elif "Target" in event_line:
-            targets = parse_smarttrade_target(event_line)
-        elif "Stoploss" in event_line or "SL:" in event_line:
+        elif "Target" in event_line or "Tp 1" in event_line or "Tp 2" in event_line or "Tp 3" in event_line or "Tp 4" in event_line:
+            parse_smarttrade_target(event_line, targets)
+        elif "Stoploss" in event_line or "SL:" in event_line or "Stop loss" in event_line:
             stoploss = parse_smarttrade_stoploss(event_line)
+
+    calculate_target_volume(targets)
 
     logger.info(
         f"Received concrete smarttrade with for {pair} with "
@@ -241,29 +245,29 @@ def parse_smarttrade_event(source, event_data):
         if not ("USDT" in pair and "BTC" in pair):
             positionsize /= currentprice
 
-        logger.debug(
+        logger.info(
             f"Calculated position {positionsize} based on amount {amount} and price {currentprice}"
         )
 
         positiontype = "buy" if direction == "long" else "sell"
         position = construct_smarttrade_position(positiontype, "market", positionsize)
-        logger.debug(
+        logger.info(
             f"Position {position} created."
         )
 
         takeprofit = construct_smarttrade_takeprofit("limit", targets)
-        logger.debug(
+        logger.info(
             f"Takeprofit {takeprofit} created."
         )
 
         stoploss = construct_smarttrade_stoploss("limit", stoploss)
-        logger.debug(
+        logger.info(
             f"Stoploss {stoploss} created."
         )
 
         note = f"Deal started based on signal from {source}"
 
-        data = open_threecommas_smarttrade(logger, api, "29981012", pair, note, position, takeprofit, stoploss)
+        data = open_threecommas_smarttrade(logger, api, config.get("smarttrade", "account-id"), pair, note, position, takeprofit, stoploss)
         dealid = handle_open_smarttrade_data(data)
     else:
         logger.error("Cannot start smarttrade because of invalid data)")
@@ -314,7 +318,7 @@ def parse_smarttrade_pair(data):
 
                 break
 
-    pair = f"{base}_{coin}"
+    pair = f"{base}_{coin.upper()}"
 
     logger.info(f"Pair '{pair}' found in {data} (base: {base}, coin: {coin}).")
 
@@ -325,23 +329,14 @@ def parse_smarttrade_entrie(data):
     """Parse data and extract entrie(s) data"""
 
 
-def parse_smarttrade_target(data):
+def parse_smarttrade_target(data, target_list):
     """Parse data and extract target(s) data"""
-
-    targetsteps = list()
 
     convertsatoshi = False
     if "satoshi" in data:
         convertsatoshi = True
 
     tpdata = re.findall(r"[0-9]{1,5}[.,]\d{1,8}k?|[0-9]{2,}k?", data.split("(")[0])
-
-    quotient, remainder = divmod(100, len(tpdata))
-
-    logger.debug(
-        f"Calculated quotient of {quotient} and remainder {remainder} based on len {len(tpdata)}"
-    )
-
     for takeprofit in tpdata:
         step = {}
 
@@ -353,19 +348,29 @@ def parse_smarttrade_target(data):
             price *= 1000.0
 
         step["price"] = price
+        step["volume"] = 0
 
+        target_list.append(step)
+
+        logger.info(f"Step '{step}' found in {data} (regex returned {tpdata}).")
+
+
+def calculate_target_volume(target_list):
+    """Calculate the volume of each target"""
+
+    quotient, remainder = divmod(100, len(target_list))
+
+    logger.info(
+        f"Calculated quotient of {quotient} and remainder {remainder} based on len {len(target_list)}"
+    )
+
+    for step in target_list:
         # Volume is calculated based on number of targets. This could be a float result and result in a volume of less
-        # than 100% due to rounding. So, the quetient is calculated for every target and the remaining volume is added
+        # than 100% due to rounding. So, the quotient is calculated for every target and the remaining volume is added
         # to the first target
         step["volume"] = quotient
-        if len(targetsteps) == 0:
-            step["volume"] += remainder
 
-        targetsteps.append(step)
-
-    logger.info(f"Targets '{targetsteps}' found in {data} (regex returned {tpdata}).")
-
-    return targetsteps
+    target_list[0]["volume"] += remainder
 
 
 def parse_smarttrade_stoploss(data):
@@ -390,7 +395,7 @@ def parse_smarttrade_stoploss(data):
 async def handle_hodloo_event(category, event):
     """Handle the received Telegram event"""
 
-    logger.debug(
+    logger.info(
         "Received message on Hodloo %s: '%s'"
         % (category, event.message.text.replace("\n", " - "))
     )
@@ -407,7 +412,7 @@ async def handle_hodloo_event(category, event):
     )
 
     if base.lower() not in ("bnb", "btc", "busd", "eth", "eur", "usdt"):
-        logger.debug(
+        logger.warning(
             f"{base}_{coin}: base '{base}' is not yet supported."
         )
         return
@@ -415,7 +420,7 @@ async def handle_hodloo_event(category, event):
     botids = get_hodloo_botids(category, base)
 
     if len(botids) == 0:
-        logger.debug(
+        logger.warning(
             f"{base}_{coin}: no valid botids configured for base '{base}'."
         )
         return
@@ -489,6 +494,24 @@ def run_tests():
         data.append(r'#AAVE ')
         data.append(r'Breakout Targets - 92 - 105 - 127 - 153 - 178 - 250 ')
         tradeid = parse_smarttrade_event("***** Manually testing the script *****", data)
+        time.sleep(10) #Pause for some time, allowing 3C to open the deal before we can close it
+        close_threecommas_smarttrade(logger, api, tradeid)
+
+    if False:
+        data.clear()
+        data.append(r'#Perl')
+        data.append(r'Buy Between 0.02 - 0.023')
+        data.append(r'')
+        data.append(r'Stop loss 0.033')
+        data.append(r'')
+        data.append(r'Tp 1 0.04')
+        data.append(r'')
+        data.append(r'Tp 2 0.046')
+        data.append(r'')
+        data.append(r'Tp 3 0.052')
+        data.append(r'')
+        data.append(r'Tp 4 0.058')
+        tradeid = parse_smarttrade_event("***** Manually testing the script for World of Crypto channel *****", data)
         time.sleep(10) #Pause for some time, allowing 3C to open the deal before we can close it
         close_threecommas_smarttrade(logger, api, tradeid)
 
@@ -598,7 +621,7 @@ smarttradechannels = config.get("smarttrade", "channel-names")
 
 for dialog in client.iter_dialogs():
     if dialog.is_channel:
-        logger.debug(
+        logger.info(
             f"{dialog.id}:{dialog.title}"
         )
 
