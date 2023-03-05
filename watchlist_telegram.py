@@ -61,13 +61,6 @@ def load_config():
         "btc-botids": [12345, 67890],
     }
 
-    cfg["smarttrade"] = {
-        "channel-names": ["Channel 1", "Channel 2"],
-        "account-id": 123456789,
-        "amount-usdt": 100.0,
-        "amount-btc": 0.001,
-    }
-
     cfg["hodloo_5"] = {
         "exchange": "Bittrex / Binance / Kucoin",
         "bnb-botids": [12345, 67890],
@@ -88,6 +81,22 @@ def load_config():
         "usdt-botids": [12345, 67890],
     }
 
+    cfg["smarttrade"] = {
+        "channel-names": json.dumps(["channel 1", "channel 2"]),
+    }
+
+    cfg["smarttrade_settings_channel 1"] = {
+        "account-id": 123456789,
+        "amount-usdt": 100.0,
+        "amount-btc": 0.001,
+    }
+
+    cfg["smarttrade_settings_channel 2"] = {
+        "account-id": 123456789,
+        "amount-usdt": 100.0,
+        "amount-btc": 0.001,
+    }
+
     with open(f"{datadir}/{program}.ini", "w", encoding = "utf-8") as cfgfile:
         cfg.write(cfgfile)
 
@@ -97,18 +106,7 @@ def load_config():
 def upgrade_config(thelogger, cfg):
     """Upgrade config file if needed."""
 
-    if not cfg.has_section("smarttrade"):
-        cfg["smarttrade"] = {
-            "channel-names": ["Channel 1", "Channel 2"],
-            "account-id": 123456789,
-            "amount-usdt": 100.0,
-            "amount-btc": 0.001,
-        }
-
-        with open(f"{datadir}/{program}.ini", "w+", encoding = "utf-8") as cfgfile:
-            cfg.write(cfgfile)
-
-        thelogger.info("Upgraded the configuration file (added smarttrade section)")
+    thelogger.info("Nothing to upgrade yet...")
 
     return cfg
 
@@ -188,17 +186,20 @@ async def handle_telegram_smarttrade_event(source, event):
     data = event.raw_text.splitlines()
 
     try:
+        # Check if some words are in the message, otherwise it's not
+        # required to start parsing the message at all
         searchwords = ["Targets", "Target 1", "TP1", "SL", "Buy Between"]
-        #if "Targets" in event.message.text:
+
         if any(word in event.message.text for word in searchwords):
             logger.info(f"Received {source} message: {data}", True)
 
             parse_smarttrade_event(source, data)
+        else:
+            logger.info(
+                f"Received {source} message which didn't pass the required word filter"
+            )
     except Exception as exception:
         logger.error(f"Exception occured: {exception}")
-        return
-
-    return
 
 
 def parse_smarttrade_event(source, event_data):
@@ -213,12 +214,16 @@ def parse_smarttrade_event(source, event_data):
 
     logger.info(f"Parsing received event from '{source}': {event_data}")
 
+    searchlistpair = ["/USDT", "/BTC", "#"]
+    searchlisttarget = ["Target", "Tp 1", "Tp 2", "Tp 3", "Tp 4"]
+    searchliststoploss = ["Stoploss", "SL:", "Stop loss"]
+
     for event_line in event_data:
-        if "/USDT" in event_line or "/BTC" in event_line or "#" in event_line:
+        if any(word in event_line for word in searchlistpair):
             pair = parse_smarttrade_pair(event_line)
-        elif "Target" in event_line or "Tp 1" in event_line or "Tp 2" in event_line or "Tp 3" in event_line or "Tp 4" in event_line:
+        elif any(word in event_line for word in searchlisttarget):
             parse_smarttrade_target(event_line, targets)
-        elif "Stoploss" in event_line or "SL:" in event_line or "Stop loss" in event_line:
+        elif any(word in event_line for word in searchliststoploss):
             stoploss = parse_smarttrade_stoploss(event_line)
 
     calculate_target_volume(targets)
@@ -237,9 +242,9 @@ def parse_smarttrade_event(source, event_data):
     )
 
     if is_valid_smarttrade(logger, currentprice, entries, targets, stoploss, direction):
-        amount = config.getfloat("smarttrade", "amount-usdt")
+        amount = config.getfloat(f"smarttrade_settings_{source}", "amount-usdt")
         if "BTC" in pair:
-            amount = config.getfloat("smarttrade", "amount-btc")
+            amount = config.getfloat(f"smarttrade_settings_{source}", "amount-btc")
 
         positionsize = amount
         if not ("USDT" in pair and "BTC" in pair):
@@ -267,7 +272,10 @@ def parse_smarttrade_event(source, event_data):
 
         note = f"Deal started based on signal from {source}"
 
-        data = open_threecommas_smarttrade(logger, api, config.get("smarttrade", "account-id"), pair, note, position, takeprofit, stoploss)
+        data = open_threecommas_smarttrade(
+            logger, api, config.get(f"smarttrade_settings_{source}", "account-id"),
+            pair, note, position, takeprofit, stoploss
+        )
         dealid = handle_open_smarttrade_data(data)
     else:
         logger.error("Cannot start smarttrade because of invalid data)")
@@ -361,13 +369,14 @@ def calculate_target_volume(target_list):
     quotient, remainder = divmod(100, len(target_list))
 
     logger.info(
-        f"Calculated quotient of {quotient} and remainder {remainder} based on len {len(target_list)}"
+        f"Calculated quotient of {quotient} and remainder {remainder} "
+        f"based on len {len(target_list)}"
     )
 
     for step in target_list:
-        # Volume is calculated based on number of targets. This could be a float result and result in a volume of less
-        # than 100% due to rounding. So, the quotient is calculated for every target and the remaining volume is added
-        # to the first target
+        # Volume is calculated based on number of targets. This could be a float result
+        # and result in a volume of less than 100% due to rounding. So, the quotient is
+        # calculated for every target and the remaining volume is added to the first target
         step["volume"] = quotient
 
     target_list[0]["volume"] += remainder
@@ -435,6 +444,34 @@ def get_hodloo_botids(category, base):
     """Get list of botids from configuration based on category and base"""
 
     return json.loads(config.get(f"hodloo_{category}", f"{base.lower()}-botids"))
+
+
+def is_config_ok(hl5_exchange, hl10_exchange, smarttrade_channels):
+    """Check if the configuration is complete"""
+
+    configok = True
+
+    if hl5_exchange not in ("none", "Bittrex", "Binance", "Kucoin"):
+        logger.error(
+            f"Exchange {hl5_exchange} not supported. Must be 'Bittrex', 'Binance' or 'Kucoin'!"
+        )
+        configok = False
+
+    if hl10_exchange not in ("none", "Bittrex", "Binance", "Kucoin"):
+        logger.error(
+            f"Exchange {hl10_exchange} not supported. Must be 'Bittrex', 'Binance' or 'Kucoin'!"
+        )
+        configok = False
+
+    for channel in smarttrade_channels:
+        if not config.has_section(f"smarttrade_settings_{channel}"):
+            logger.error(
+                f"Channel {channel} should be read, but required "
+                f"smarttrade_settings_{channel} section is missing!"
+            )
+            configok = False
+
+    return configok
 
 
 def run_tests():
@@ -515,6 +552,7 @@ def run_tests():
         time.sleep(10) #Pause for some time, allowing 3C to open the deal before we can close it
         close_threecommas_smarttrade(logger, api, tradeid)
 
+
 # Start application
 program = Path(__file__).stem
 
@@ -572,17 +610,14 @@ else:
 config = upgrade_config(logger, config)
 
 # Validation of data before starting
-hl5exchange = config.get("hodloo_5", "exchange")
-if hl5exchange not in ("Bittrex", "Binance", "Kucoin"):
-    logger.error(
-        f"Exchange {hl5exchange} not supported. Must be 'Bittrex', 'Binance' or 'Kucoin'!"
-    )
-    sys.exit(0)
+hl5exchange = config.get("hodloo_5", "exchange") if config.has_section("hodloo_5") else "none"
+hl10exchange = config.get("hodloo_10", "exchange") if config.has_section("hodloo_10") else "none"
+customchannelname = config.get("custom", "channel-name") if config.has_section("custom") else "none"
+smarttradechannels = json.loads(config.get("smarttrade", "channel-names"))
 
-hl10exchange = config.get("hodloo_10", "exchange")
-if hl10exchange not in ("Bittrex", "Binance", "Kucoin"):
+if not is_config_ok(hl5exchange, hl10exchange, smarttradechannels):
     logger.error(
-        f"Exchange {hl10exchange} not supported. Must be 'Bittrex', 'Binance' or 'Kucoin'!"
+        "Configuration contains errors, script will exit!"
     )
     sys.exit(0)
 
@@ -598,7 +633,13 @@ api = init_threecommas_api(config)
 allbotids = json.loads(config.get("custom", "usdt-botids")) + json.loads(config.get("custom", "btc-botids"))
 
 # - Hodloo bots
-for hlcategory in ("5", "10"):
+hlcategories = []
+if hl5exchange != "none":
+    hlcategories.append("5")
+if hl10exchange != "none":
+    hlcategories.append("10")
+
+for hlcategory in hlcategories:
     for hlbase in ("bnb", "btc", "busd", "eth", "eur", "usdt"):
         allbotids += get_hodloo_botids(hlcategory, hlbase)
 
@@ -607,26 +648,23 @@ marketcodecache = prefetch_marketcodes(logger, api, allbotids)
 # Prefetch blacklists
 blacklist = load_blacklist(logger, api, blacklistfile)
 
-# Watchlist telegram trigger
+# Telethon client for Telegram
 client = TelegramClient(
     f"{datadir}/{program}",
     config.get("settings", "tgram-api-id"),
     config.get("settings", "tgram-api-hash"),
 ).start(config.get("settings", "tgram-phone-number"))
 
-customchannelname = config.get("custom", "channel-name")
-hl5channelname = f"Hodloo {hl5exchange} 5%"
-hl10channelname = f"Hodloo {hl10exchange} 10%"
-smarttradechannels = config.get("smarttrade", "channel-names")
-
+logger.info("Listing all subscribed TG Channels and on which to listen:")
 for dialog in client.iter_dialogs():
     if dialog.is_channel:
         logger.info(
             f"{dialog.id}:{dialog.title}"
         )
 
-        if dialog.title == customchannelname:
-            logger.info(f"Listening to updates from '{dialog.title}' (id={dialog.id}) ...",
+        if customchannelname != "none" and dialog.title == customchannelname:
+            logger.info(
+                f"Listening to updates from '{dialog.title}' (id={dialog.id}) ...",
                 True
             )
             @client.on(events.NewMessage(chats=dialog.id))
@@ -636,8 +674,9 @@ for dialog in client.iter_dialogs():
                 await handle_custom_event(event)
                 notification.send_notification()
 
-        elif dialog.title == hl5channelname:
-            logger.info(f"Listening to updates from '{dialog.title}' (id={dialog.id}) ...",
+        elif hl5exchange != "none" and dialog.title == f"Hodloo {hl5exchange} 5%":
+            logger.info(
+                f"Listening to updates from '{dialog.title}' (id={dialog.id}) ...",
                 True
             )
             @client.on(events.NewMessage(chats=dialog.id))
@@ -647,8 +686,9 @@ for dialog in client.iter_dialogs():
                 await handle_hodloo_event("5", event)
                 notification.send_notification()
 
-        elif dialog.title == hl10channelname:
-            logger.info(f"Listening to updates from '{dialog.title}' (id={dialog.id}) ...",
+        elif hl10exchange != "none" and dialog.title == f"Hodloo {hl10exchange} 10%":
+            logger.info(
+                f"Listening to updates from '{dialog.title}' (id={dialog.id}) ...",
                 True
             )
             @client.on(events.NewMessage(chats=dialog.id))
@@ -659,17 +699,17 @@ for dialog in client.iter_dialogs():
                 notification.send_notification()
 
         elif dialog.title in smarttradechannels:
-            logger.info(f"Listening to updates from '{dialog.title}' (id={dialog.id}) ...",
+            logger.info(
+                f"Listening to updates from '{dialog.title}' (id={dialog.id}) ...",
                 True
             )
             @client.on(events.NewMessage(chats=dialog.id))
             async def callback_smarttrade(event):
                 """Receive Telegram message."""
 
-                chat_from = event.chat if event.chat else (await event.get_chat()) # telegram MAY not send the chat enity
+                chat_from = event.chat if event.chat else (await event.get_chat())
                 await handle_telegram_smarttrade_event(chat_from.title, event)
                 notification.send_notification()
-
 
 # Start telegram client
 client.start()
