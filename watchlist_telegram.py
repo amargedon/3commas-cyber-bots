@@ -27,7 +27,9 @@ from helpers.threecommas import (
     prefetch_marketcodes
 )
 from helpers.threecommas_smarttrade import (
+    cancel_threecommas_smarttrade,
     close_threecommas_smarttrade,
+    get_threecommas_smarttrades,
     open_threecommas_smarttrade
 )
 from helpers.watchlist import (
@@ -89,12 +91,18 @@ def load_config():
         "account-id": 123456789,
         "amount-usdt": 100.0,
         "amount-btc": 0.001,
+        "entry-strategy": "market/limit",
+        "entry-limit-option": "low/high/average",
+        "entry-limit-deviation": 0.0,
     }
 
     cfg["smarttrade_settings_channel 2"] = {
         "account-id": 123456789,
         "amount-usdt": 100.0,
         "amount-btc": 0.001,
+        "entry-strategy": "market/limit",
+        "entry-limit-option": "low/high/average",
+        "entry-limit-deviation": 0.0,
     }
 
     with open(f"{datadir}/{program}.ini", "w", encoding = "utf-8") as cfgfile:
@@ -153,17 +161,21 @@ async def handle_custom_event(event):
         botids = json.loads(config.get("custom", "usdt-botids"))
         if len(botids) == 0:
             logger.warning(
-                f"No valid usdt-botids configured for '{base}', disabled"
+                f"No valid usdt-botids configured for '{base}', cannot start "
+                f"a deal for '{coin}'"
             )
             return
     elif base == "BTC":
         botids = json.loads(config.get("custom", "btc-botids"))
         if len(botids) == 0:
-            logger.warning(f"No valid btc-botids configured for '{base}', disabled")
+            logger.warning(
+                f"No valid btc-botids configured for '{base}', cannot start "
+                f"a deal for '{coin}'"
+            )
             return
     else:
         logger.error(
-            f"Error the base of pair '{pair}' being '{base}' is not supported yet!"
+            f"The base of pair '{pair}' being '{base}' is not supported yet!"
         )
         return
 
@@ -215,47 +227,54 @@ def parse_smarttrade_event(source, event_data):
     logger.info(f"Parsing received event from '{source}': {event_data}")
 
     searchlistpair = ["/USDT", "/BTC", "#"]
+    searchlistentry = ["Buy Between"]
     searchlisttarget = ["Target", "Tp 1", "Tp 2", "Tp 3", "Tp 4"]
     searchliststoploss = ["Stoploss", "SL:", "Stop loss"]
 
     for event_line in event_data:
         if any(word in event_line for word in searchlistpair):
             pair = parse_smarttrade_pair(event_line)
+        elif any(word in event_line for word in searchlistentry):
+            parse_smarttrade_entry(event_line, entries)
         elif any(word in event_line for word in searchlisttarget):
             parse_smarttrade_target(event_line, targets)
         elif any(word in event_line for word in searchliststoploss):
             stoploss = parse_smarttrade_stoploss(event_line)
 
     calculate_target_volume(targets)
+    direction = get_smarttrade_direction(targets)
 
     logger.info(
-        f"Received concrete smarttrade with for {pair} with "
-        f"stoploss '{stoploss}' and targets '{targets}'",
+        f"Received concrete smarttrade ({direction}) "
+        f"for {pair} with entries '{entries}', "
+        f"targets '{targets}' "
+        f"and stoploss '{stoploss}'.",
         True
     )
 
-    currentprice = float(get_threecommas_currency_rate(logger, api, "binance", pair))
-
-    direction = get_smarttrade_direction(targets)
-    logger.info(
-        f"Direction is '{direction}'."
+    # Check if there is already a deal active for this pair
+    accountid = config.get(f"smarttrade_settings_{source}", "account-id")
+    smarttradedata = get_threecommas_smarttrades(
+        logger, api, accountid, pair, "smart_trade", "active"
     )
-
-    if is_valid_smarttrade(logger, currentprice, entries, targets, stoploss, direction):
-        amount = config.getfloat(f"smarttrade_settings_{source}", "amount-usdt")
-        if "BTC" in pair:
-            amount = config.getfloat(f"smarttrade_settings_{source}", "amount-btc")
-
-        positionsize = amount
-        if not ("USDT" in pair and "BTC" in pair):
-            positionsize /= currentprice
-
-        logger.info(
-            f"Calculated position {positionsize} based on amount {amount} and price {currentprice}"
+    if smarttradedata:
+        logger.warning(
+            f"Smart_trade {smarttradedata[0]['id']} already active for "
+            f"pair {pair} on this account. Not starting a new one!"
         )
+        return -1
 
+    # Positiondata contains:
+    # 0 - Order type (market, limit)
+    # 1 - Units
+    # 2 - Price
+    positiondata = calculate_position_units_price(source, pair, entries)
+
+    if is_valid_smarttrade(logger, positiondata, targets, stoploss, direction):
         positiontype = "buy" if direction == "long" else "sell"
-        position = construct_smarttrade_position(positiontype, "market", positionsize)
+        position = construct_smarttrade_position(
+            positiontype, positiondata[0], positiondata[1], positiondata[2]
+        )
         logger.info(
             f"Position {position} created."
         )
@@ -273,7 +292,7 @@ def parse_smarttrade_event(source, event_data):
         note = f"Deal started based on signal from {source}"
 
         data = open_threecommas_smarttrade(
-            logger, api, config.get(f"smarttrade_settings_{source}", "account-id"),
+            logger, api, accountid,
             pair, note, position, takeprofit, stoploss
         )
         dealid = handle_open_smarttrade_data(data)
@@ -320,21 +339,39 @@ def parse_smarttrade_pair(data):
                 coinorpair = line.replace("#", "")
 
                 if "/" in coinorpair:
-                    coin = coinorpair.split('/')[0]
+                    coin = coinorpair.split('/')[0].upper()
                 else:
-                    coin = coinorpair
+                    coin = coinorpair.upper()
 
                 break
 
-    pair = f"{base}_{coin.upper()}"
+    pair = f"{base}_{coin}"
 
     logger.info(f"Pair '{pair}' found in {data} (base: {base}, coin: {coin}).")
 
     return pair
 
 
-def parse_smarttrade_entrie(data):
+def parse_smarttrade_entry(data, entry_list):
     """Parse data and extract entrie(s) data"""
+
+    convertsatoshi = False
+    if "satoshi" in data:
+        convertsatoshi = True
+
+    entrydata = re.findall(r"[0-9]{1,5}[.,]\d{1,8}k?|[0-9]{2,}k?", data)
+    for price in entrydata:
+        if convertsatoshi:
+            price = float(price) * 0.00000001
+        if isinstance(price, str) and "k" in price:
+            price = float(price.replace("k", ""))
+            price *= 1000.0
+        else:
+            price = float(price)
+
+        entry_list.append(price)
+
+    logger.info(f"Entries '{entry_list}' found in {data} (regex returned {entrydata}).")
 
 
 def parse_smarttrade_target(data, target_list):
@@ -354,13 +391,48 @@ def parse_smarttrade_target(data, target_list):
         if isinstance(price, str) and "k" in price:
             price = float(price.replace("k", ""))
             price *= 1000.0
+        else:
+            price = float(price)
 
         step["price"] = price
         step["volume"] = 0
 
         target_list.append(step)
 
-        logger.info(f"Step '{step}' found in {data} (regex returned {tpdata}).")
+        logger.info(f"Take Profit of '{takeprofit}' found in {data} (regex returned {tpdata}).")
+
+
+def calculate_position_units_price(source, pair, entry_list):
+    """Calculate the price to open the position on"""
+
+    price = float(get_threecommas_currency_rate(logger, api, "binance", pair))
+
+    ordertype = config.get(f"smarttrade_settings_{source}", "entry-strategy")
+    if ordertype == "limit":
+        if config.get(f"smarttrade_settings_{source}", "entry-limit-option") == "low":
+            price = min(entry_list)
+        elif config.get(f"smarttrade_settings_{source}", "entry-limit-option") == "high":
+            price = max(entry_list)
+        elif config.get(f"smarttrade_settings_{source}", "entry-limit-option") == "average":
+            price = sum(entry_list) / len(entry_list)
+
+    deviation = config.getfloat(f"smarttrade_settings_{source}", "entry-limit-deviation")
+    if deviation != 0.0:
+        price = price * ((100.0 + deviation) / 100.0)
+
+    amount = config.getfloat(f"smarttrade_settings_{source}", "amount-usdt")
+    if "BTC" in pair:
+        amount = config.getfloat(f"smarttrade_settings_{source}", "amount-btc")
+
+    units = amount
+    if not ("USDT" in pair and "BTC" in pair):
+        units /= price
+
+    logger.info(
+        f"Calculated units {units} based on amount {amount} and price {price}"
+    )
+
+    return ordertype, units, price
 
 
 def calculate_target_volume(target_list):
@@ -471,6 +543,20 @@ def is_config_ok(hl5_exchange, hl10_exchange, smarttrade_channels):
             )
             configok = False
 
+        if config.get(f"smarttrade_settings_{channel}", "entry-strategy") not in ("market", "limit"):
+            logger.error(
+                f"Channel {channel} is having an invalid entry-strategy. "
+                f"Allowed options: 'market' or 'limit'."
+            )
+            configok = False
+
+        if config.get(f"smarttrade_settings_{channel}", "entry-limit-option") not in ("low", "high", "average"):
+            logger.error(
+                f"Channel {channel} is having an invalid entry-limit-option. "
+                f"Allowed options: 'low', 'high' or 'average'."
+            )
+            configok = False
+
     return configok
 
 
@@ -482,6 +568,7 @@ def run_tests():
     data = list()
 
     if False:
+        # Format for Forex Trading
         data.clear()
         data.append(r'LTO/BTC')
         data.append(r'LTO Network has established itself as Europeâ€™s leading blockchain with strong real-world usage.')
@@ -490,9 +577,11 @@ def run_tests():
         data.append(r'Targets: 493-575-685-795 satoshi')
         tradeid = parse_smarttrade_event("***** Manually testing the script *****", data)
         time.sleep(10) #Pause for some time, allowing 3C to open the deal before we can close it
-        close_threecommas_smarttrade(logger, api, tradeid)
+        if not close_threecommas_smarttrade(logger, api, tradeid):
+            cancel_threecommas_smarttrade(logger, api, tradeid)
 
     if False:
+        # Format for Forex Trading
         data.clear()
         data.append(r'LTO/USDT lying above strong support. Stochastic is giving a buying signal. It will bounce hard from here. so now is the right time to build your position in it before breakout for massive profitsðŸ˜Š')
         data.append(r'')
@@ -500,7 +589,8 @@ def run_tests():
         data.append(r'SL: $0.0952')
         tradeid = parse_smarttrade_event("***** Manually testing the script *****", data)
         time.sleep(10) #Pause for some time, allowing 3C to open the deal before we can close it
-        close_threecommas_smarttrade(logger, api, tradeid)
+        if not close_threecommas_smarttrade(logger, api, tradeid):
+            cancel_threecommas_smarttrade(logger, api, tradeid)
 
     if False:
         data.clear()
@@ -512,7 +602,8 @@ def run_tests():
         data.append(r'@Forex_Tradings')
         tradeid = parse_smarttrade_event("***** Manually testing the script *****", data)
         time.sleep(10) #Pause for some time, allowing 3C to open the deal before we can close it
-        close_threecommas_smarttrade(logger, api, tradeid)
+        if not close_threecommas_smarttrade(logger, api, tradeid):
+            cancel_threecommas_smarttrade(logger, api, tradeid)
 
     if False:
         data.clear()
@@ -524,7 +615,8 @@ def run_tests():
         data.append(r'Targets - 23.5k - 22.6k - 21.5k - 20k - 17k')
         tradeid = parse_smarttrade_event("***** Manually testing the script *****", data) # Need to test
         time.sleep(10) #Pause for some time, allowing 3C to open the deal before we can close it
-        close_threecommas_smarttrade(logger, api, tradeid)
+        if not close_threecommas_smarttrade(logger, api, tradeid):
+            cancel_threecommas_smarttrade(logger, api, tradeid)
 
     if False:
         data.clear()
@@ -532,9 +624,11 @@ def run_tests():
         data.append(r'Breakout Targets - 92 - 105 - 127 - 153 - 178 - 250 ')
         tradeid = parse_smarttrade_event("***** Manually testing the script *****", data)
         time.sleep(10) #Pause for some time, allowing 3C to open the deal before we can close it
-        close_threecommas_smarttrade(logger, api, tradeid)
+        if not close_threecommas_smarttrade(logger, api, tradeid):
+            cancel_threecommas_smarttrade(logger, api, tradeid)
 
     if False:
+        # Format for World Of Charts (Crypto)
         data.clear()
         data.append(r'#Perl')
         data.append(r'Buy Between 0.02 - 0.023')
@@ -548,10 +642,30 @@ def run_tests():
         data.append(r'Tp 3 0.052')
         data.append(r'')
         data.append(r'Tp 4 0.058')
-        tradeid = parse_smarttrade_event("***** Manually testing the script for World of Crypto channel *****", data)
+        tradeid = parse_smarttrade_event("My Test Channel", data)
         time.sleep(10) #Pause for some time, allowing 3C to open the deal before we can close it
-        close_threecommas_smarttrade(logger, api, tradeid)
+        if not close_threecommas_smarttrade(logger, api, tradeid):
+            cancel_threecommas_smarttrade(logger, api, tradeid)
 
+    if False:
+        # Format for World Of Charts (Crypto)
+        data.clear()
+        data.append(r'#Snx')
+        data.append(r'Buy Between 2.40 - 2.65')
+        data.append(r'')
+        data.append(r'Stop loss 1.80')
+        data.append(r'')
+        data.append(r'Tp 1 3')
+        data.append(r'')
+        data.append(r'Tp 2 3.40')
+        data.append(r'')
+        data.append(r'Tp 3 3.80')
+        data.append(r'')
+        data.append(r'Tp 4 4.20')
+        tradeid = parse_smarttrade_event("My Test Channel", data)
+        time.sleep(10) #Pause for some time, allowing 3C to open the deal before we can close it
+        if not close_threecommas_smarttrade(logger, api, tradeid):
+            cancel_threecommas_smarttrade(logger, api, tradeid)
 
 # Start application
 program = Path(__file__).stem
