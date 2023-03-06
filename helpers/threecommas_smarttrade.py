@@ -39,18 +39,14 @@ def open_threecommas_smarttrade(logger, api, accountid, pair, note, position, ta
 
 
 def close_threecommas_smarttrade(logger, api, smarttradeid):
-    """Close smarttrade with the given id."""
-
-    logger.debug(
-        f"Closing smarttrades {smarttradeid}"
-    )
+    """Close smarttrade (on current market price) with the given id."""
 
     data = None
     error, data = api.request(
         entity="smart_trades_v2",
         action="close_by_market",
         action_id=str(smarttradeid),
-        additional_headers={"Forced-Mode": "paper"},
+        additional_headers={"Forced-Mode": "paper"}
     )
 
     if error:
@@ -62,9 +58,70 @@ def close_threecommas_smarttrade(logger, api, smarttradeid):
             logger.error("Error occurred while closing smarttrade")
     else:
         logger.info(
-            f"Closed smarttrade '{smarttradeid}'.",
+            f"Closed smarttrade {smarttradeid}.",
             True
         )
 
     return data
-    
+
+
+def cancel_threecommas_smarttrade(logger, api, smarttradeid):
+    """Cancel smarttrade (was not opened yet) with the given id."""
+
+    data = None
+    error, data = api.request(
+        entity="smart_trades_v2",
+        action="cancel",
+        action_id=str(smarttradeid),
+        additional_headers={"Forced-Mode": "paper"}
+    )
+
+    if error:
+        if "msg" in error:
+            logger.error(
+                f"Error occurred while cancelling smarttrade: {error['msg']}",
+            )
+        else:
+            logger.error("Error occurred while cancelling smarttrade")
+    else:
+        logger.info(
+            f"Cancelled smarttrade {smarttradeid}.",
+            True
+        )
+
+    return data
+
+
+def get_threecommas_smarttrades(logger, api, account_id, pair, trade_type, status):
+    """Get smarttrade(s) with the given id."""
+
+    payload= {
+        "account_id": account_id
+    }
+
+    if pair:
+        payload["pair"] = pair
+
+    if trade_type:
+        payload["type"] = trade_type
+
+    if status:
+        payload["status"] = status
+
+    data = None
+    error, data = api.request(
+        entity="smart_trades_v2",
+        action="",
+        payload=payload,
+        additional_headers={"Forced-Mode": "paper"}
+    )
+
+    if error:
+        if "msg" in error:
+            logger.error(
+                f"Error occurred while cancelling smarttrade: {error['msg']}",
+            )
+        else:
+            logger.error("Error occurred while cancelling smarttrade")
+
+    return data
