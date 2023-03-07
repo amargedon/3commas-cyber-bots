@@ -94,6 +94,7 @@ def load_config():
         "entry-strategy": "market/limit",
         "entry-limit-option": "low/high/average",
         "entry-limit-deviation": 0.0,
+        "target-price-deviation": 0.0,
     }
 
     cfg["smarttrade_settings_channel 2"] = {
@@ -103,6 +104,7 @@ def load_config():
         "entry-strategy": "market/limit",
         "entry-limit-option": "low/high/average",
         "entry-limit-deviation": 0.0,
+        "target-price-deviation": 0.0,
     }
 
     with open(f"{datadir}/{program}.ini", "w", encoding = "utf-8") as cfgfile:
@@ -241,16 +243,7 @@ def parse_smarttrade_event(source, event_data):
         elif any(word in event_line for word in searchliststoploss):
             stoploss = parse_smarttrade_stoploss(event_line)
 
-    calculate_target_volume(targets)
     direction = get_smarttrade_direction(targets)
-
-    logger.info(
-        f"Received concrete smarttrade ({direction}) "
-        f"for {pair} with entries '{entries}', "
-        f"targets '{targets}' "
-        f"and stoploss '{stoploss}'.",
-        True
-    )
 
     # Check if there is already a deal active for this pair
     accountid = config.get(f"smarttrade_settings_{source}", "account-id")
@@ -264,11 +257,22 @@ def parse_smarttrade_event(source, event_data):
         )
         return -1
 
-    # Positiondata contains:
+    message = (
+        f"New smarttrade received ({direction}) "
+        f"for {pair} with entry '{entries}', "
+        f"targets '{targets}' "
+        f"and stoploss '{stoploss}'. "
+    )
+
+    # Calculate the units and price to buy them for. Positiondata contains:
     # 0 - Order type (market, limit)
     # 1 - Units
     # 2 - Price
     positiondata = calculate_position_units_price(source, pair, entries)
+
+    # Calculate the volume for each target, and update the price according
+    # to the configuration
+    calculate_target_price_volume(source, targets)
 
     if is_valid_smarttrade(logger, positiondata, targets, stoploss, direction):
         positiontype = "buy" if direction == "long" else "sell"
@@ -289,13 +293,18 @@ def parse_smarttrade_event(source, event_data):
             f"Stoploss {stoploss} created."
         )
 
-        note = f"Deal started based on signal from {source}"
-
         data = open_threecommas_smarttrade(
-            logger, api, accountid,
-            pair, note, position, takeprofit, stoploss
+            logger, api, accountid, pair, f"Deal started based on signal from {source}",
+            position, takeprofit, stoploss
         )
         dealid = handle_open_smarttrade_data(data)
+
+        message += (
+            f"Started trade {dealid} with entry {entries}, "
+            f"targets {targets} and stoploss {stoploss}."
+        )
+
+        logger.info(message, True)
     else:
         logger.error("Cannot start smarttrade because of invalid data)")
 
@@ -305,16 +314,10 @@ def parse_smarttrade_event(source, event_data):
 def handle_open_smarttrade_data(data):
     """Handle the return data of 3C"""
 
-    dealid = 0
+    dealid = -1
 
     if data is not None:
         dealid = data["id"]
-        pair = data["pair"]
-
-        logger.info(
-            f"Opened smarttrade {dealid} for pair '{pair}'.",
-            True
-        )
 
     return dealid
 
@@ -435,17 +438,22 @@ def calculate_position_units_price(source, pair, entry_list):
     return ordertype, units, price
 
 
-def calculate_target_volume(target_list):
-    """Calculate the volume of each target"""
+def calculate_target_price_volume(source, target_list):
+    """Calculate the price and volume of each target"""
 
     quotient, remainder = divmod(100, len(target_list))
-
     logger.info(
         f"Calculated quotient of {quotient} and remainder {remainder} "
         f"based on len {len(target_list)}"
     )
 
+    deviation = config.getfloat(f"smarttrade_settings_{source}", "target-price-deviation")
+
     for step in target_list:
+        # Adjust the price if specified in the configuration
+        if deviation != 0.0:
+            step["price"] *= (100.0 + deviation) / 100.0
+
         # Volume is calculated based on number of targets. This could be a float result
         # and result in a volume of less than 100% due to rounding. So, the quotient is
         # calculated for every target and the remaining volume is added to the first target
@@ -554,6 +562,18 @@ def is_config_ok(hl5_exchange, hl10_exchange, smarttrade_channels):
             logger.error(
                 f"Channel {channel} is having an invalid entry-limit-option. "
                 f"Allowed options: 'low', 'high' or 'average'."
+            )
+            configok = False
+
+        if not config.has_option(f"smarttrade_settings_{channel}", "entry-limit-deviation"):
+            logger.error(
+                f"Channel {channel} is missing the entry-limit-deviation. "
+            )
+            configok = False
+
+        if not config.has_option(f"smarttrade_settings_{channel}", "target-price-deviation"):
+            logger.error(
+                f"Channel {channel} is missing the target-price-deviation. "
             )
             configok = False
 
