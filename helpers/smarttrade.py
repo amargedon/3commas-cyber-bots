@@ -10,10 +10,10 @@ def is_valid_smarttrade(logger, position_data, targets, stoploss, direction):
 
     if not isnan(stoploss):
         if direction == "long" and position_data[1] <= stoploss:
-            logger.warning(f"Current price {position_data[1]} for long equal or below stoploss {stoploss}!")
+            logger.warning(f"Current price {position_data[2]} for long equal or below stoploss {stoploss}!")
             isvalid = False
         elif direction == "short" and position_data[1] >= stoploss:
-            logger.warning(f"Current price {position_data[1]} for short equal or above stoploss {stoploss}!")
+            logger.warning(f"Current price {position_data[2]} for short equal or above stoploss {stoploss}!")
             isvalid = False
 
     if not targets:
