@@ -300,7 +300,7 @@ def parse_smarttrade_event(source, event_data):
         dealid = handle_open_smarttrade_data(data)
 
         message += (
-            f"Started trade {dealid} with entry {entries}, "
+            f"\nStarted trade {dealid} with entry {entries}, "
             f"targets {targets} and stoploss {stoploss}."
         )
 
