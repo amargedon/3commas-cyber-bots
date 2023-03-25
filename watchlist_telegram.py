@@ -202,11 +202,18 @@ async def handle_telegram_smarttrade_event(source, event):
     data = event.raw_text.splitlines()
 
     try:
-        # Check if some words are in the message, otherwise it's not
+        # Check if some prashes are in the message, otherwise it's not
         # required to start parsing the message at all
-        searchwords = ["Targets", "Target 1", "TP1", "SL", "Buy Between"]
+        searchphrases = [
+            "Targets",
+            "Target 1",
+            "TP1",
+            "SL",
+            "Buy Between",
+            "Incase Of Breakout Expecting"
+        ]
 
-        if any(word in event.message.text for word in searchwords):
+        if any(phrase in event.message.text for phrase in searchphrases):
             logger.info(f"Received {source} message: {data}", True)
 
             parse_event(source, data)
@@ -358,7 +365,8 @@ def parse_smarttrade_pair(data):
     pair = None
     coin = None
 
-    if "/USDT" in data or "/BTC" in data:
+    # Use casefold to search case insensitive
+    if "/USDT".casefold() in data.casefold() or "/BTC".casefold() in data.casefold():
         pairdata = data.split(" ")[0].split("/")
         base = pairdata[1].replace("#", "")
         coin = pairdata[0].replace("#", "")
@@ -373,6 +381,9 @@ def parse_smarttrade_pair(data):
 
                 if "/" in coinorpair:
                     coin = coinorpair.split('/')[0].upper()
+                elif "BTC" in coinorpair.upper():
+                    base = "BTC"
+                    coin = coinorpair.upper().replace("BTC", "")
                 else:
                     coin = coinorpair.upper()
 
@@ -731,6 +742,26 @@ def run_tests():
         time.sleep(10) #Pause for some time, allowing 3C to open the deal before we can close it
         if not close_threecommas_smarttrade(logger, api, tradeid):
             cancel_threecommas_smarttrade(logger, api, tradeid)
+
+    if False:
+        #TODO: still have to test this one
+        # Format for World Of Charts (Crypto)
+        data.clear()
+        data.append(r'#Pivxbtc')
+        data.append(r'Buy Between 0.00001700 - 0.00001800')
+        data.append(r'')
+        data.append(r'Stop loss 0.0.00001500')
+        data.append(r'')
+        data.append(r'Tp 1 0.00002050')
+        data.append(r'')
+        data.append(r'Tp 2 0.00002300')
+        data.append(r'')
+        data.append(r'Tp 3 0.00002550')
+        tradeid = parse_event("My Test Channel", data)
+        time.sleep(10) #Pause for some time, allowing 3C to open the deal before we can close it
+        if not close_threecommas_smarttrade(logger, api, tradeid):
+            cancel_threecommas_smarttrade(logger, api, tradeid)
+
 
 # Start application
 program = Path(__file__).stem
