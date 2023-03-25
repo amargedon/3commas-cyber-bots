@@ -3,21 +3,30 @@
 from math import isnan
 
 
-def is_valid_smarttrade(logger, position_data, targets, stoploss, direction):
+def is_valid_smarttrade(logger, unit_price_data, targets, stoploss, direction):
     """Validate smarttrade data"""
 
     isvalid = True
 
     if not isnan(stoploss):
-        if direction == "long" and position_data[1] <= stoploss:
-            logger.warning(f"Current price {position_data[2]} for long equal or below stoploss {stoploss}!")
+        orderprice = unit_price_data[2]
+        if direction.lower() == "long" and orderprice <= stoploss:
+            logger.warning(
+                f"Order price {orderprice} for long equal or below stoploss {stoploss}!"
+            )
             isvalid = False
-        elif direction == "short" and position_data[1] >= stoploss:
-            logger.warning(f"Current price {position_data[2]} for short equal or above stoploss {stoploss}!")
+        elif direction.lower() == "short" and orderprice >= stoploss:
+            logger.warning(
+                f"Order price {orderprice} for short equal or above stoploss {stoploss}!"
+            )
             isvalid = False
 
+    if direction not in ("long", "short"):
+        logger.warning(f"Direction '{direction}' not valid!")
+        isvalid = False
+
     if not targets:
-        logger.warning("No targets set!")
+        logger.warning("List of targets is empty!")
         isvalid = False
 
     return isvalid

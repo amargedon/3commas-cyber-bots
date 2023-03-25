@@ -95,6 +95,7 @@ def load_config():
         "entry-limit-option": "low/high/average",
         "entry-limit-deviation": 0.0,
         "target-price-deviation": 0.0,
+        "botids": [12345, 67890],
     }
 
     cfg["smarttrade_settings_channel 2"] = {
@@ -105,6 +106,7 @@ def load_config():
         "entry-limit-option": "low/high/average",
         "entry-limit-deviation": 0.0,
         "target-price-deviation": 0.0,
+        "botids": [12345, 67890],
     }
 
     with open(f"{datadir}/{program}.ini", "w", encoding = "utf-8") as cfgfile:
@@ -207,7 +209,7 @@ async def handle_telegram_smarttrade_event(source, event):
         if any(word in event.message.text for word in searchwords):
             logger.info(f"Received {source} message: {data}", True)
 
-            parse_smarttrade_event(source, data)
+            parse_event(source, data)
         else:
             logger.info(
                 f"Received {source} message which didn't pass the required word filter"
@@ -216,10 +218,8 @@ async def handle_telegram_smarttrade_event(source, event):
         logger.error(f"Exception occured: {exception}")
 
 
-def parse_smarttrade_event(source, event_data):
-    """Parse the data of an event and extract smarttrade data"""
-
-    dealid = 0
+def parse_event(source, event_data):
+    """Parse the data of an event and extract trade data"""
 
     pair = None
     entries = list()
@@ -243,7 +243,24 @@ def parse_smarttrade_event(source, event_data):
         elif any(word in event_line for word in searchliststoploss):
             stoploss = parse_smarttrade_stoploss(event_line)
 
-    direction = get_smarttrade_direction(targets)
+    if pair is None:
+        logger.warning(
+            "No pair found in event, stop processing."
+        )
+        return -1
+
+    # Try to open a SmartTrade
+    dealid = process_for_smarttrade(source, pair, entries, targets, stoploss)
+
+    # Try to start a DCA deal
+    process_for_dca(source, pair, "long")
+
+    # Return the SmartTrade deal id
+    return dealid
+
+
+def process_for_smarttrade(source, pair, entry_list, target_list, stoploss):
+    """Process the event further for smarttrade"""
 
     # Check if there is already a deal active for this pair
     accountid = config.get(f"smarttrade_settings_{source}", "account-id")
@@ -257,58 +274,71 @@ def parse_smarttrade_event(source, event_data):
         )
         return -1
 
-    message = (
-        f"New smarttrade received ({direction}) "
-        f"for {pair} with entry '{entries}', "
-        f"targets '{targets}' "
-        f"and stoploss '{stoploss}'. "
-    )
+    direction = get_smarttrade_direction(target_list)
 
-    # Calculate the units and price to buy them for. Positiondata contains:
+    # Calculate the units and price to buy them for. Unitpricedata contains:
     # 0 - Order type (market, limit)
     # 1 - Units
     # 2 - Price
-    positiondata = calculate_position_units_price(source, pair, entries)
+    unitpricedata = calculate_position_units_price(source, pair, entry_list)
 
     # Calculate the volume for each target, and update the price according
     # to the configuration
-    calculate_target_price_volume(source, targets)
+    calculate_target_price_volume(source, target_list)
 
-    if is_valid_smarttrade(logger, positiondata, targets, stoploss, direction):
+    dealid = 0
+    if is_valid_smarttrade(logger, unitpricedata, target_list, stoploss, direction):
+        message = (
+            f"New smarttrade received ({direction}) "
+            f"for {pair} with entry '{entry_list}', "
+            f"targets '{target_list}' "
+            f"and stoploss '{stoploss}'. "
+        )
+
         positiontype = "buy" if direction == "long" else "sell"
-        position = construct_smarttrade_position(
-            positiontype, positiondata[0], positiondata[1], positiondata[2]
+        positiondata = construct_smarttrade_position(
+            positiontype, unitpricedata[0], unitpricedata[1], unitpricedata[2]
         )
         logger.info(
-            f"Position {position} created."
-        )
-
-        takeprofit = construct_smarttrade_takeprofit("limit", targets)
-        logger.info(
-            f"Takeprofit {takeprofit} created."
+            f"Position {positiondata} created."
         )
 
-        stoploss = construct_smarttrade_stoploss("limit", stoploss)
+        takeprofitdata = construct_smarttrade_takeprofit("limit", target_list)
         logger.info(
-            f"Stoploss {stoploss} created."
+            f"Takeprofit {takeprofitdata} created."
+        )
+
+        stoplossdata = construct_smarttrade_stoploss("limit", stoploss)
+        logger.info(
+            f"Stoploss {stoplossdata} created."
         )
 
         data = open_threecommas_smarttrade(
             logger, api, accountid, pair, f"Deal started based on signal from {source}",
-            position, takeprofit, stoploss
+            positiondata, takeprofitdata, stoplossdata
         )
         dealid = handle_open_smarttrade_data(data)
 
         message += (
-            f"\nStarted trade {dealid} with entry {entries}, "
-            f"targets {targets} and stoploss {stoploss}."
+            f"\nStarted trade {dealid} with entry {entry_list}, "
+            f"targets {target_list} and stoploss {stoplossdata}."
         )
 
         logger.info(message, True)
     else:
-        logger.error("Cannot start smarttrade because of invalid data)")
+        logger.error("Cannot start smarttrade because of invalid data.")
 
     return dealid
+
+
+def process_for_dca(source, pair, direction):
+    """Process the event further for DCA deal"""
+
+    botids = json.loads(config.get(f"smarttrade_settings_{source}", "botids"))
+    if len(botids) > 0:
+        process_botlist(logger, api, blacklistfile, blacklist, marketcodecache,
+                            botids, pair.split("_")[1], direction
+        )
 
 
 def handle_open_smarttrade_data(data):
@@ -441,6 +471,9 @@ def calculate_position_units_price(source, pair, entry_list):
 def calculate_target_price_volume(source, target_list):
     """Calculate the price and volume of each target"""
 
+    if len(target_list) == 0:
+        return
+
     quotient, remainder = divmod(100, len(target_list))
     logger.info(
         f"Calculated quotient of {quotient} and remainder {remainder} "
@@ -526,6 +559,18 @@ def get_hodloo_botids(category, base):
     return json.loads(config.get(f"hodloo_{category}", f"{base.lower()}-botids"))
 
 
+def get_smarttrade_botids(smarttrade_channels):
+    """Get list of botids from configuration used for smarttrades"""
+
+    botids = []
+
+    for channel in smarttrade_channels:
+        if config.has_option(f"smarttrade_settings_{channel}", "botids"):
+            botids += json.loads(config.get(f"smarttrade_settings_{channel}", "botids"))
+
+    return botids
+
+
 def is_config_ok(hl5_exchange, hl10_exchange, smarttrade_channels):
     """Check if the configuration is complete"""
 
@@ -595,7 +640,7 @@ def run_tests():
         data.append(r'Technically lying above strong support. RSI is in the oversold region. MACD is showing bullish momentum. It will pump hard from here. so now is the right time to build your position in it before breakout for massive profitsðŸ˜Š')
         data.append(r'')
         data.append(r'Targets: 493-575-685-795 satoshi')
-        tradeid = parse_smarttrade_event("***** Manually testing the script *****", data)
+        tradeid = parse_event("***** Manually testing the script *****", data)
         time.sleep(10) #Pause for some time, allowing 3C to open the deal before we can close it
         if not close_threecommas_smarttrade(logger, api, tradeid):
             cancel_threecommas_smarttrade(logger, api, tradeid)
@@ -607,7 +652,7 @@ def run_tests():
         data.append(r'')
         data.append(r'Targets: $0.1175-0.1575-0.2015-0.2565')
         data.append(r'SL: $0.0952')
-        tradeid = parse_smarttrade_event("***** Manually testing the script *****", data)
+        tradeid = parse_event("***** Manually testing the script *****", data)
         time.sleep(10) #Pause for some time, allowing 3C to open the deal before we can close it
         if not close_threecommas_smarttrade(logger, api, tradeid):
             cancel_threecommas_smarttrade(logger, api, tradeid)
@@ -620,7 +665,7 @@ def run_tests():
         data.append(r'Stoploss - H4 close below 1.3$')
         data.append(r'Targets - 1.385 - 1.42 - 1.48 - 1.72 (25% Each)')
         data.append(r'@Forex_Tradings')
-        tradeid = parse_smarttrade_event("***** Manually testing the script *****", data)
+        tradeid = parse_event("***** Manually testing the script *****", data)
         time.sleep(10) #Pause for some time, allowing 3C to open the deal before we can close it
         if not close_threecommas_smarttrade(logger, api, tradeid):
             cancel_threecommas_smarttrade(logger, api, tradeid)
@@ -633,7 +678,7 @@ def run_tests():
         data.append(r'Entry 2 - 25.5k (50%)')
         data.append(r'Stoploss - Daily Close above 26k')
         data.append(r'Targets - 23.5k - 22.6k - 21.5k - 20k - 17k')
-        tradeid = parse_smarttrade_event("***** Manually testing the script *****", data) # Need to test
+        tradeid = parse_event("***** Manually testing the script *****", data) # Need to test
         time.sleep(10) #Pause for some time, allowing 3C to open the deal before we can close it
         if not close_threecommas_smarttrade(logger, api, tradeid):
             cancel_threecommas_smarttrade(logger, api, tradeid)
@@ -642,7 +687,7 @@ def run_tests():
         data.clear()
         data.append(r'#AAVE ')
         data.append(r'Breakout Targets - 92 - 105 - 127 - 153 - 178 - 250 ')
-        tradeid = parse_smarttrade_event("***** Manually testing the script *****", data)
+        tradeid = parse_event("***** Manually testing the script *****", data)
         time.sleep(10) #Pause for some time, allowing 3C to open the deal before we can close it
         if not close_threecommas_smarttrade(logger, api, tradeid):
             cancel_threecommas_smarttrade(logger, api, tradeid)
@@ -662,7 +707,7 @@ def run_tests():
         data.append(r'Tp 3 0.052')
         data.append(r'')
         data.append(r'Tp 4 0.058')
-        tradeid = parse_smarttrade_event("My Test Channel", data)
+        tradeid = parse_event("My Test Channel", data)
         time.sleep(10) #Pause for some time, allowing 3C to open the deal before we can close it
         if not close_threecommas_smarttrade(logger, api, tradeid):
             cancel_threecommas_smarttrade(logger, api, tradeid)
@@ -682,7 +727,7 @@ def run_tests():
         data.append(r'Tp 3 3.80')
         data.append(r'')
         data.append(r'Tp 4 4.20')
-        tradeid = parse_smarttrade_event("My Test Channel", data)
+        tradeid = parse_event("My Test Channel", data)
         time.sleep(10) #Pause for some time, allowing 3C to open the deal before we can close it
         if not close_threecommas_smarttrade(logger, api, tradeid):
             cancel_threecommas_smarttrade(logger, api, tradeid)
@@ -776,6 +821,9 @@ if hl10exchange != "none":
 for hlcategory in hlcategories:
     for hlbase in ("bnb", "btc", "busd", "eth", "eur", "usdt"):
         allbotids += get_hodloo_botids(hlcategory, hlbase)
+
+# - DCA bots used for SmartTrades
+allbotids += get_smarttrade_botids(smarttradechannels)
 
 marketcodecache = prefetch_marketcodes(logger, api, allbotids)
 

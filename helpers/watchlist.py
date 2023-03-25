@@ -65,7 +65,7 @@ def process_bot_deal(logger, api, blacklistfile, blacklist, marketcodes, thebot,
     pair = format_pair(marketcode, base, coin)
 
     deals = thebot["active_deals"]
-    if trade == "LONG":
+    if trade.upper() == "LONG":
         # Check active deal(s) for this bot
         dealcount = 0
         if deals:
@@ -74,7 +74,9 @@ def process_bot_deal(logger, api, blacklistfile, blacklist, marketcodes, thebot,
                     dealcount += 1
 
         if dealcount >= alloweddealsonsamepair:
-            logger.debug("Open deals for %s reached max allowed open deals for same pair!" % pair)
+            logger.debug(
+                f"Open deals for {pair} reached max allowed open deals for same pair!"
+            )
             return
 
         # Check if pair is on 3Commas blacklist
