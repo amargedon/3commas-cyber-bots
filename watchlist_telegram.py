@@ -252,9 +252,20 @@ def parse_event(source, event_data):
 
     if pair is None:
         logger.warning(
-            "No pair found in event, stop processing."
+            "No pair found in event. Cannot create a SmartTrade."
         )
         return -1
+
+    if entries is None:
+        logger.warning(
+            "No entries found in event. Cannot create a SmartTrade."
+        )
+        return -1
+
+    if targets is None:
+        logger.warning(
+            "No targets found in event. Cannot create a SmartTrade."
+        )
 
     # Try to open a SmartTrade
     dealid = process_for_smarttrade(source, pair, entries, targets, stoploss)
@@ -481,9 +492,6 @@ def calculate_position_units_price(source, pair, entry_list):
 
 def calculate_target_price_volume(source, target_list):
     """Calculate the price and volume of each target"""
-
-    if len(target_list) == 0:
-        return
 
     quotient, remainder = divmod(100, len(target_list))
     logger.info(

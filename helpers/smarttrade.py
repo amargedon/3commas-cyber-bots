@@ -25,10 +25,6 @@ def is_valid_smarttrade(logger, unit_price_data, targets, stoploss, direction):
         logger.warning(f"Direction '{direction}' not valid!")
         isvalid = False
 
-    if not targets:
-        logger.warning("List of targets is empty!")
-        isvalid = False
-
     return isvalid
 
 
