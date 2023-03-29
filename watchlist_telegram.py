@@ -252,20 +252,9 @@ def parse_event(source, event_data):
 
     if pair is None:
         logger.warning(
-            "No pair found in event. Cannot create a SmartTrade."
+            "No pair found in event. Cannot create any deal."
         )
         return -1
-
-    if entries is None:
-        logger.warning(
-            "No entries found in event. Cannot create a SmartTrade."
-        )
-        return -1
-
-    if targets is None:
-        logger.warning(
-            "No targets found in event. Cannot create a SmartTrade."
-        )
 
     # Try to open a SmartTrade
     dealid = process_for_smarttrade(source, pair, entries, targets, stoploss)
@@ -279,6 +268,18 @@ def parse_event(source, event_data):
 
 def process_for_smarttrade(source, pair, entry_list, target_list, stoploss):
     """Process the event further for smarttrade"""
+
+    if entry_list is None or len(entry_list) == 0:
+        logger.warning(
+            "No entries found in event. Cannot create a SmartTrade."
+        )
+        return -1
+
+    if target_list is None or len(target_list) == 0:
+        logger.warning(
+            "No targets found in event. Cannot create a SmartTrade."
+        )
+        return -1
 
     # Check if there is already a deal active for this pair
     accountid = config.get(f"smarttrade_settings_{source}", "account-id")
