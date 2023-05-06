@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """Cyberjunky's 3Commas bot helpers."""
 import argparse
+import asyncio
 import configparser
 import os
 import sqlite3
 import sys
 import time
 from pathlib import Path
+
+from helpers.datasources import (
+    get_binance_announcement_data
+)
 
 from helpers.logging import Logger, NotificationHandler
 from helpers.misc import (
@@ -34,38 +39,143 @@ def load_config():
         "logrotate": 7,
         "3c-apikey": "Your 3Commas API Key",
         "3c-apisecret": "Your 3Commas API Secret",
-        "cmc-apikey": "Your CoinMarketCap API Key",
         "notifications": False,
         "notify-urls": ["notify-url1"],
     }
     cfg["blacklist"] = {
         "stable-and-fiat": [
+            "1GOLD",
+            "AGEUR",
+            "ALUSD",
+            "ARTH",
+            "AUSD",
             "AUD",
+            "BAC",
+            "BEAN",
+            "BGBP",
+            "BIDR",
+            "BITCNY",
+            "BITEUR",
+            "BITGOLD",
+            "BITUSD",
+            "BKRW",
+            "BRCP",
+            "BRZ",
+            "BSD",
             "BUSD",
+            "BVND",
+            "CADC",
+            "CEUR",
+            "COFFIN",
+            "CONST",
+            "COUSD",
+            "CUSD",
+            "CUSDT",
             "DAI",
+            "DGD",
+            "DGX",
+            "DJED",
+            "DOLA",
+            "DPT",
+            "DSD",
+            "DUSD",
+            "EBASE",
+            "EOSDT",
+            "ESD",
             "EUR",
+            "EUROC",
+            "EUROS",
             "EURS",
+            "EURT",
             "FEI",
+            "FLOAT",
+            "FLUSD",
             "FRAX",
+            "FUSD",
             "GBP",
+            "GBPT",
             "GUSD",
+            "GYEN",
+            "H2O",
+            "HGT",
             "HUSD",
+            "IDRT",
+            "IRON",
+            "IST",
+            "ITL",
+            "IUSDS",
+            "JPYC",
+            "KBC",
+            "KRT",
             "LUSD",
+            "MDS",
+            "MDO",
+            "MIM",
+            "MIMATIC",
+            "MONEY",
+            "MTR",
+            "MUSD",
+            "MXNT",
+            "NUSD",
+            "ONC",
+            "ONEICHI",
+            "OUSD",
+            "PAR",
+            "QC",
+            "RSV",
+            "SAC",
+            "SBD",
+            "SEUR",
+            "STATIK",
             "SUSD",
             "TRIBE",
+            "TRYB",
+            "TOR",
             "TUSD",
+            "UETH",
             "USD",
+            "USDAP",
+            "USDB",
             "USDC",
             "USDD",
+            "USDEX"
+            "USDFL",
+            "USDI",
+            "USDH",
+            "USDJ",
+            "USDK",
+            "USDL",
             "USDN",
             "USDP",
+            "USDQ",
+            "USDR",
+            "USDS",
             "USDT",
             "USDX",
+            "USDZ",
+            "USN",
+            "USNBT",
             "UST",
             "USTC",
+            "USX",
+            "VAI",
+            "WANUSDT",
+            "XCHF",
+            "XEUR",
+            "XIDR",
             "XSGD",
+            "XSTUSD",
+            "XUSD",
+            "YUSD",
+            "ZUSD",
+            "fUSDT",
+            "mCEUR",
+            "mCUSD",
             "vBUSD",
-            "vUSDC"
+            "vDAI",
+            "vUSDC",
+            "vUSDT",
+            "xDAI"
         ],
         "add-stable-fiat-pairs": True,
     }
@@ -73,18 +183,12 @@ def load_config():
         "add-down-pairs": False,
         "add-up-pairs": False,
     }
+    cfg["binance_delist"] = {
+        "enable": False,
+        "close-smarttrades": "none / pair / coin",
+        "close-dca-deals": "none / pair / coin",
+    }
     cfg["gdax"] = {
-    }
-    cfg["ftx"] = {
-        "add-bear-pairs": False,
-        "add-bull-pairs": False,
-        "add-half-pairs": False,
-        "add-hedge-pairs": False,
-    }
-    cfg["ftx_futures"] = {
-        "add-perp-pairs": False,
-        "add-1230-pairs": False,
-        "add-0331-pairs": False,
     }
     cfg["kucoin"] = {
         "add-3L-pairs": False,
@@ -103,7 +207,7 @@ def upgrade_config(thelogger, cfg):
     return cfg
 
 
-def open_cmc_db():
+def open_blacklist_db():
     """Create or open database to store data."""
 
     try:
@@ -120,12 +224,12 @@ def open_cmc_db():
         dbcursor = dbconnection.cursor()
         logger.info(f"Database '{datadir}/{dbname}' created successfully")
 
-        dbcursor.execute(
-            "CREATE TABLE IF NOT EXISTS sections ("
-            "sectionid STRING Primary Key, "
-            "next_processing_timestamp INT"
-            ")"
-        )
+        #dbcursor.execute(
+        #    "CREATE TABLE IF NOT EXISTS sections ("
+        #    "sectionid STRING Primary Key, "
+        #    "next_processing_timestamp INT"
+        #    ")"
+        #)
 
         logger.info("Database tables created successfully")
 
@@ -172,9 +276,9 @@ def is_stable_fiat_pair(base, coin):
     exclude = False
     stablefiatpair = False
 
-    coins = config.get("blacklist", "stable-and-fiat")
+    coins = [x.lower() for x in config.get("blacklist", "stable-and-fiat")]
 
-    if base in coins and coin in coins:
+    if base.lower() in coins and coin.lower() in coins:
         exclude = config.getboolean("blacklist", "add-stable-fiat-pairs")
         stablefiatpair = True
         logger.info(
@@ -194,7 +298,7 @@ def process_marketcode(marketcode, base, coin):
             f"No section for market {marketcode} in configuration. "
         )
 
-    categories = ["down", "up", "bear", "bull", "half", "hedge", "perp", "1230", "0331", "3L", "3S"]
+    categories = ["down", "up", "3L", "3S"]
     for category in categories:
         if config.has_option(marketcode, f"add-{category}-pairs") and config.getboolean(marketcode, f"add-{category}-pairs"):
             exclude = category.lower() in coin.lower()
@@ -206,6 +310,44 @@ def process_marketcode(marketcode, base, coin):
             break
 
     return exclude
+
+
+def handle_delisting():
+    """Handle delisting of pairs and coins"""
+
+    if not config.getboolean("binance_delist", "enable"):
+        return
+
+    loop = asyncio.get_event_loop()
+    coroutine = get_binance_announcement_data(logger)
+    data = loop.run_until_complete(coroutine)
+
+    logger.info(
+        f"Received data: {data}"
+    )
+
+    coinlist = []
+    pairlist = []
+    for entry in data:
+        pairs = entry["pairs"]
+
+        tmplist = pairs.split(",")
+        for tmppair in tmplist:
+            coin, base = tmppair.split("/")
+
+            coin = coin.strip()
+            base = base.strip()
+
+            pair = f"{base}_{coin}"
+            if pair not in pairlist:
+                pairlist.append(pair)
+            
+            if coin not in coinlist:
+                coinlist.append(coin)
+
+    logger.info(
+        f"Coins: {coinlist}. \nPairs: {pairlist}"
+    )
 
 
 # Start application
@@ -281,10 +423,10 @@ else:
     logger.info(f"Loaded configuration from '{datadir}/{program}.ini'")
 
 # Initialize 3Commas API
-api = init_threecommas_api(config)
+#api = init_threecommas_api(config)
 
 # Initialize or open the database
-db = open_cmc_db()
+db = open_blacklist_db()
 cursor = db.cursor()
 
 # Refresh coin pairs based on CoinMarketCap data
@@ -294,17 +436,14 @@ while True:
     config = load_config()
     logger.info(f"Reloaded configuration from '{datadir}/{program}.ini'")
 
-    # Configuration settings
-    #timeint = int(config.get("settings", "timeinterval"))
+    handle_delisting()
+    exit(0)
 
     # Get the current blacklist
     blacklist = get_threecommas_blacklist(logger, api)
     logger.info(
         f"Current blacklist: {blacklist}"
     )
-
-    # Current time to determine which sections to process
-    #starttime = int(time.time())
 
     newblacklist = blacklist.copy()    
 
