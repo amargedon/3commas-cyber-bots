@@ -3,6 +3,8 @@
 import json
 import time
 
+from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 import cloudscraper
 import requests
 from bs4 import BeautifulSoup
@@ -299,5 +301,100 @@ def get_shared_bot_data(logger, bot_id, bot_secret):
 
     except json.decoder.JSONDecodeError:
         logger.error(f"Shared bot data ({bot_id}) is not valid json")
+
+    return data
+
+
+async def get_binance_announcement_data(logger):
+    """Scrape Binance announcements for delisting pairs"""
+
+    data = []
+
+    async with async_playwright() as p:
+        baseurl = "https://www.binance.com"
+        browser = await p.chromium.launch(headless=False, slow_mo=1000)
+        page = await browser.new_page()
+        await page.goto(f"{baseurl}/en/support/announcement/delisting?c=161&navId=161")
+        await page.locator('button:text("Accept All Cookies")').click();
+
+        # Grab complete div with all articles
+        articles = await page.query_selector_all('.css-k5e9j4')
+
+        # TODO: remove after testing
+        count = 0
+
+        for article in articles:
+            result = dict()
+            title_el = await article.query_selector(".css-f94ykk")
+            result["title"] = await title_el.inner_text()
+
+            validtitles = ["Binance Will Delist", "Removal of Trading Pairs"]
+            if any(part in result["title"] for part in validtitles):
+                date_el = await article.query_selector(".css-eoufru")
+                result["date"] = await date_el.inner_text()
+
+                link_el = await article.query_selector(".css-1ey6mep")
+                result["link"] = await link_el.get_attribute("href")
+
+                result["pairs"] = ""
+
+                # Open new page to fetch details about pairs
+                articlepage = await browser.new_page()
+                await articlepage.goto(f"{baseurl}{result['link']}")
+                await articlepage.locator('button:text("Accept All Cookies")').click();
+
+                lines = await articlepage.query_selector_all('li[class="css-usuhj8"]')
+                print(len(lines))
+                for entry in lines:
+                    if entry is None:
+                        continue
+
+                    text_el = await entry.query_selector(".css-6hm6tl")
+                    if text_el is None:
+                        print("css-6hm6tl not found in entry")
+                        continue
+                    
+                    innertext = await text_el.inner_text()
+                    print(innertext)
+                    if innertext == "The exact trading pairs being removed are: ":
+                        print("Correct text")
+                        pair_el = await entry.query_selector(".css-1lohbqv")
+                        if pair_el is None:
+                            print("css-1lohbqv not found in entry")
+                            pair_el = await text_el.query_selector(".css-1lohbqv")
+                            if pair_el is None:
+                                print("css-1lohbqv not found in text")
+                                continue
+
+                        print(pair_el)
+                        text = await pair_el.inner_text()
+                        if "/" in text:
+                            if result["pairs"]:
+                                result["pairs"] += ", "
+                            result["pairs"] += text.strip()
+
+                        break
+                    elif "At " in innertext:
+                        print(innertext)
+                        text = innertext.split("):")[1]
+                        print(text)
+                        if "/" in text:
+                            if result["pairs"]:
+                                result["pairs"] += ", "
+                            result["pairs"] += text.strip()
+
+                await articlepage.close()
+
+                data.append(result)
+                count += 1
+
+            if count >= 2:
+                break
+
+        logger.info(
+            f"Collected data: {data}"
+        )
+
+        await browser.close()
 
     return data
