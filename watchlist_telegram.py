@@ -470,7 +470,8 @@ async def cleanup_stored_coins():
     )
     db.commit()
 
-    write_pair_file()
+    if sharedir and config.getboolean("settings", "generate-pair-json"):
+        write_pair_file()
 
 def handle_open_smarttrade_data(data):
     """Handle the return data of 3C"""
