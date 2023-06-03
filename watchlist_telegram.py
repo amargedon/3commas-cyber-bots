@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Cyberjunky's 3Commas bot helpers."""
+import aiocron
 import argparse
 import configparser
 import json
@@ -425,6 +426,12 @@ def process_for_storage(coin):
         f"Stored coin {coin} until {unix_timestamp_to_string(removetime, '%Y-%m-%d %H:%M:%S')}"
     )
 
+    write_pair_file()
+
+
+def write_pair_file():
+    """Write the json pair file to disk"""
+
     coinlist = [c[0] for c in db.execute(
         f"SELECT coin FROM coins"
     ).fetchall()]
@@ -452,6 +459,18 @@ def process_for_storage(coin):
         f"Wrote {len(coinlist)} coins to {filename}."
     )
 
+@aiocron.crontab('*/10 * * * *')
+async def cleanup_stored_coins():
+    """Remove coins from database"""
+
+    currenttime = int(time.time())
+
+    db.execute(
+        f"DELETE FROM coins WHERE timestamp <= {currenttime}"
+    )
+    db.commit()
+
+    write_pair_file()
 
 def handle_open_smarttrade_data(data):
     """Handle the return data of 3C"""
