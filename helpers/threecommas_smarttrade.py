@@ -1,6 +1,8 @@
 """Cyberjunky's 3Commas bot helpers."""
 
-def open_threecommas_smarttrade(logger, api, accountid, pair, note, position, take_profit, stop_loss):
+def open_threecommas_smarttrade(
+        logger, api, accountid, pair, note, position, take_profit, stop_loss
+    ):
     """Open smarttrade with the given position, profit and stoploss."""
 
     payload = {
@@ -87,13 +89,10 @@ def cancel_threecommas_smarttrade(logger, api, smarttradeid):
         logger.info(
             f"Cancelled smarttrade {smarttradeid}.",
             True
-        )
-
-    return data
 
 
-def get_threecommas_smarttrades(logger, api, account_id, pair, trade_type, status):
-    """Get smarttrade(s) with the given id."""
+def get_threecommas_smarttrades(logger, api, accountid, status="finished", pair="", trade_type=""):
+    """Get all trades from 3Commas linked to an account."""
 
     payload= {
         "account_id": account_id
@@ -113,15 +112,42 @@ def get_threecommas_smarttrades(logger, api, account_id, pair, trade_type, statu
         entity="smart_trades_v2",
         action="",
         payload=payload,
-        additional_headers={"Forced-Mode": "paper"}
     )
-
     if error:
         if "msg" in error:
             logger.error(
-                f"Error occurred while cancelling smarttrade: {error['msg']}",
+                f"Error occurred while fetching smarttrades: {error['msg']}"
             )
         else:
-            logger.error("Error occurred while cancelling smarttrade")
+            logger.error("Error occurred while fetching smarttrades")
+    else:
+        logger.debug(
+            f"Fetched the smarttrades for account {accountid} OK ({len(data)} trades)"
+        )
+
+    return data
+
+
+def get_threecommas_smarttrade_orders(logger, api, trade_id):
+    """Get all orders from 3Commas SmartTrade."""
+
+    data = None
+
+    error, data = api.request(
+        entity="smart_trades_v2",
+        action="get_trades",
+        action_id=str(trade_id)
+    )
+    if error:
+        if "msg" in error:
+            logger.error(
+                f"Error occurred while fetching orders for smarttrade {trade_id}: {error['msg']}"
+            )
+        else:
+            logger.error("Error occurred while fetching orders for smarttrade")
+    else:
+        logger.debug(
+            f"Fetched the orders for smarttrade {trade_id} OK ({len(data)} orders)"
+        )
 
     return data
