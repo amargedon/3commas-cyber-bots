@@ -89,9 +89,10 @@ def cancel_threecommas_smarttrade(logger, api, smarttradeid):
         logger.info(
             f"Cancelled smarttrade {smarttradeid}.",
             True
+        )
 
 
-def get_threecommas_smarttrades(logger, api, accountid, status="finished", pair="", trade_type=""):
+def get_threecommas_smarttrades(logger, api, account_id, status="finished", pair="", trade_type=""):
     """Get all trades from 3Commas linked to an account."""
 
     payload= {
@@ -122,7 +123,7 @@ def get_threecommas_smarttrades(logger, api, accountid, status="finished", pair=
             logger.error("Error occurred while fetching smarttrades")
     else:
         logger.debug(
-            f"Fetched the smarttrades for account {accountid} OK ({len(data)} trades)"
+            f"Fetched the smarttrades for account {account_id} OK ({len(data)} trades)"
         )
 
     return data
