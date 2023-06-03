@@ -6,6 +6,7 @@ import json
 from math import nan
 import os
 import re
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -13,6 +14,7 @@ from pathlib import Path
 from telethon import TelegramClient, events
 
 from helpers.logging import Logger, NotificationHandler
+from helpers.misc import unix_timestamp_to_string
 from helpers.smarttrade import (
     construct_smarttrade_position,
     construct_smarttrade_stoploss,
@@ -53,6 +55,8 @@ def load_config():
         "tgram-phone-number": "Your Telegram Phone number",
         "tgram-api-id": "Your Telegram API ID",
         "tgram-api-hash": "Your Telegram API Hash",
+        "generate-pair-json": False,
+        "generate-pair-lifetime": 86400,
         "notifications": False,
         "notify-urls": ["notify-url1"],
     }
@@ -118,9 +122,45 @@ def load_config():
 def upgrade_config(thelogger, cfg):
     """Upgrade config file if needed."""
 
-    thelogger.info("Nothing to upgrade yet...")
+    if not cfg.has_option("settings", "generate-pair-json"):
+        cfg.set("settings", "generate-pair-json", "False")
+        cfg.set("settings", "generate-pair-lifetime", "86400")
+
+        with open(f"{datadir}/{program}.ini", "w+", encoding = "utf-8") as cfgfile:
+            cfg.write(cfgfile)
+
+        thelogger.info("Upgraded the configuration file")
 
     return cfg
+
+
+def open_watchlist_db():
+    """Create or open database to store data."""
+
+    try:
+        dbname = f"{program}.sqlite3"
+        dbpath = f"file:{datadir}/{dbname}?mode=rw"
+        dbconnection = sqlite3.connect(dbpath, uri=True)
+        dbconnection.row_factory = sqlite3.Row
+
+        logger.info(f"Database '{datadir}/{dbname}' opened successfully")
+
+    except sqlite3.OperationalError:
+        dbconnection = sqlite3.connect(f"{datadir}/{dbname}")
+        dbconnection.row_factory = sqlite3.Row
+        dbcursor = dbconnection.cursor()
+        logger.info(f"Database '{datadir}/{dbname}' created successfully")
+
+        dbcursor.execute(
+            "CREATE TABLE IF NOT EXISTS coins ("
+            "coin STRING Primary Key, "
+            "timestamp INT"
+            ")"
+        )
+
+        logger.info("Database tables created successfully")
+
+    return dbconnection
 
 
 async def handle_custom_event(event):
@@ -228,6 +268,7 @@ async def handle_telegram_smarttrade_event(source, event):
 def parse_event(source, event_data):
     """Parse the data of an event and extract trade data"""
 
+    coin = None
     pair = None
     entries = list()
     targets = list()
@@ -242,7 +283,7 @@ def parse_event(source, event_data):
 
     for event_line in event_data:
         if any(word in event_line for word in searchlistpair):
-            pair = parse_smarttrade_pair(event_line)
+            coin, pair = parse_smarttrade_pair(event_line)
         elif any(word in event_line for word in searchlistentry):
             parse_smarttrade_entry(event_line, entries)
         elif any(word in event_line for word in searchlisttarget):
@@ -250,7 +291,7 @@ def parse_event(source, event_data):
         elif any(word in event_line for word in searchliststoploss):
             stoploss = parse_smarttrade_stoploss(event_line)
 
-    if pair is None:
+    if coin is None or pair is None:
         logger.warning(
             "No pair found in event. Cannot create any deal."
         )
@@ -261,6 +302,10 @@ def parse_event(source, event_data):
 
     # Try to start a DCA deal
     process_for_dca(source, pair, "long")
+
+    # Store the pair for external usage
+    if sharedir and config.getboolean("settings", "generate-pair-json"):
+        process_for_storage(coin)
 
     # Return the SmartTrade deal id
     return dealid
@@ -284,7 +329,7 @@ def process_for_smarttrade(source, pair, entry_list, target_list, stoploss):
     # Check if there is already a deal active for this pair
     accountid = config.get(f"smarttrade_settings_{source}", "account-id")
     smarttradedata = get_threecommas_smarttrades(
-        logger, api, accountid, pair, "smart_trade", "active"
+        logger, api, accountid, "active", pair, "smart_trade"
     )
     if smarttradedata:
         logger.warning(
@@ -360,6 +405,54 @@ def process_for_dca(source, pair, direction):
         )
 
 
+def process_for_storage(coin):
+    """Process the coin and store it"""
+
+    # Store coin, and remove in two days
+    removetime = int(time.time()) + config.getint("settings", "generate-pair-lifetime")
+
+    db.execute(
+        f"INSERT OR REPLACE INTO coins ("
+        f"coin, "
+        f"timestamp "
+        f") VALUES ("
+        f"'{coin}', {removetime}"
+        f")"
+    )
+    db.commit()
+
+    logger.info(
+        f"Stored coin {coin} until {unix_timestamp_to_string(removetime, '%Y-%m-%d %H:%M:%S')}"
+    )
+
+    coinlist = [c[0] for c in db.execute(
+        f"SELECT coin FROM coins"
+    ).fetchall()]
+
+    pairdata = {
+        "pairs": []
+    }
+
+    baselist = ["BNB", "BTC", "ETH", "BUSD", "USDT", "TUSD"]
+    for coin in coinlist:
+        for base in baselist:
+            pair = f"{coin}/{base}"
+            pairdata["pairs"].append(pair)
+
+    filename = f"{sharedir}/tradepairs.json"
+
+    # Serializing json
+    json_object = json.dumps(pairdata, indent = 2)
+    
+    # Writing to sample.json
+    with open(filename, "w") as outfile:
+        outfile.write(json_object)
+
+    logger.debug(
+        f"Wrote {len(coinlist)} coins to {filename}."
+    )
+
+
 def handle_open_smarttrade_data(data):
     """Handle the return data of 3C"""
 
@@ -405,7 +498,7 @@ def parse_smarttrade_pair(data):
 
     logger.info(f"Pair '{pair}' found in {data} (base: {base}, coin: {coin}).")
 
-    return pair
+    return coin, pair
 
 
 def parse_smarttrade_entry(data, entry_list):
@@ -777,8 +870,15 @@ program = Path(__file__).stem
 
 # Parse and interpret options.
 parser = argparse.ArgumentParser(description="Cyberjunky's 3Commas bot helper.")
-parser.add_argument("-d", "--datadir", help="data directory to use", type=str)
-parser.add_argument("-b", "--blacklist", help="blacklist to use", type=str)
+parser.add_argument(
+    "-d", "--datadir", help="data directory to use", type=str
+)
+parser.add_argument(
+    "-b", "--blacklist", help="blacklist to use", type=str
+)
+parser.add_argument(
+    "-s", "--sharedir", help="directory to use for shared files", type=str
+)
 
 args = parser.parse_args()
 if args.datadir:
@@ -791,6 +891,12 @@ if args.blacklist:
     blacklistfile = f"{datadir}/{args.blacklist}"
 else:
     blacklistfile = ""
+
+# pylint: disable-msg=C0103
+if args.sharedir:
+    sharedir = args.sharedir
+else:
+    sharedir = None
 
 # Create or load configuration file
 config = load_config()
@@ -842,6 +948,10 @@ if not is_config_ok(hl5exchange, hl10exchange, smarttradechannels):
 
 # Initialize 3Commas API
 api = init_threecommas_api(config)
+
+# Initialize or open the database
+db = open_watchlist_db()
+cursor = db.cursor()
 
 # Code to enable testing instead of waiting for events.
 #run_tests()
