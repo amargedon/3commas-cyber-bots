@@ -330,7 +330,7 @@ def process_for_smarttrade(source, pair, entry_list, target_list, stoploss):
     # Check if there is already a deal active for this pair
     accountid = config.get(f"smarttrade_settings_{source}", "account-id")
     smarttradedata = get_threecommas_smarttrades(
-        logger, api, accountid, "active", pair, "smart_trade"
+        logger, api, accountid, "active", "smart_trade", pair
     )
     if smarttradedata:
         logger.warning(

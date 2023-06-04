@@ -92,11 +92,12 @@ def cancel_threecommas_smarttrade(logger, api, smarttradeid):
         )
 
 
-def get_threecommas_smarttrades(logger, api, account_id, status="finished", pair="", trade_type=""):
+def get_threecommas_smarttrades(logger, api, account_id, status="finished", trade_type="", pair=""):
     """Get all trades from 3Commas linked to an account."""
 
     payload= {
-        "account_id": account_id
+        "account_id": account_id,
+        "per_page": 100
     }
 
     if pair:
