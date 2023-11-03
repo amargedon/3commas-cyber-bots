@@ -465,19 +465,21 @@ def control_threecommas_bots(logger, api, thebot, cmd):
         action=cmd,
         action_id=str(thebot["id"]),
     )
+
+    # cmd is enable or disable, so append the 'd' for logging purposes below
     if data:
         logger.info(
-            f"Bot '{thebot['name']}' is {cmd}",
+            f"Bot '{thebot['name']}' is {cmd}d",
             True
         )
     else:
         if error and "msg" in error:
             logger.error(
-                f"Error occurred while '{thebot['name']}' bot was {cmd}: {error['msg']}"
+                f"Error occurred while '{thebot['name']}' bot was {cmd}d: {error['msg']}"
             )
         else:
             logger.error(
-                f"Error occurred while '{thebot['name']}' bot was {cmd}"
+                f"Error occurred while '{thebot['name']}' bot was {cmd}d"
             )
 
 

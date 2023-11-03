@@ -20,6 +20,7 @@ from helpers.misc import (
     wait_time_interval
 )
 from helpers.threecommas import (
+    control_threecommas_bots,
     get_threecommas_account_marketcode,
     init_threecommas_api,
     init_threecommas_websocket,
@@ -437,7 +438,14 @@ def update_bot_config(bot_data):
             f"Pairs after excluding: {newpairs}"
         )
 
-        set_threecommas_bot_pairs(logger, api, bot_data, newpairs, False, True, False)
+        # Bot will be disabled when all the pairs allowed have an active trade. Once one
+        # or more pairs without active trade are present, the bot will be enabled.
+        if len(newpairs) > 0:
+            set_threecommas_bot_pairs(logger, api, bot_data, newpairs, False, True, False)
+            if not bot_data["is_enabled"]:
+                control_threecommas_bots(logger, api, bot_data, "enable")
+        elif bot_data["is_enabled"]:
+            control_threecommas_bots(logger, api, bot_data, "disable")
     else:
         logger.error(
             f"Marketcode not found for bot {bot_data['id']}. Cannot update pairs!"
