@@ -319,24 +319,35 @@ def websocket_update(deal_data):
     threaddb = init_thread_db()
     existingdeal = check_deal(threaddb.cursor(), deal_data["id"])
 
-    if existingdeal and deal_data["finished?"]:
-        # Deal is finished, remove it from the db
-        threaddb.execute(
-            f"DELETE FROM deals "
-            f"WHERE botid = {deal_data['bot_id']} AND dealid = {deal_data['id']}"
-        )
-        threaddb.commit()
+    logger.info(
+        f"Received deal data over websocket: {deal_data}"
+    )
 
-        logger.info(
-            f"Deal {deal_data['id']}/{deal_data['pair']} on "
-            f"bot \"{deal_data['bot_name']} finished!",
-            True
-        )
+    if deal_data["finished?"]:
+        if existingdeal:
+            threaddb.execute(
+                f"DELETE FROM deals "
+                f"WHERE botid = {deal_data['bot_id']} AND dealid = {deal_data['id']}"
+            )
+            threaddb.commit()
 
-        # Finished deal, get the cluster the bot belongs to
-        clusterid = get_bot_cluster(deal_data["bot_id"])
+            logger.info(
+                f"Deal {deal_data['id']}/{deal_data['pair']} on "
+                f"bot \"{deal_data['bot_name']} finished! This deal is not part ",
+                f"of any configured cluster and this message is only informative.",
+                True
+            )
 
-        aggregrate = True
+            # Finished deal, get the cluster the bot belongs to
+            clusterid = get_bot_cluster(deal_data["bot_id"])
+
+            aggregrate = True
+        else:
+            logger.info(
+                f"Deal {deal_data['id']}/{deal_data['pair']} on "
+                f"bot \"{deal_data['bot_name']} finished!",
+                True
+            )
     else:
         if not existingdeal:
             # New deal, check if the bot is part of any cluster
@@ -348,8 +359,14 @@ def websocket_update(deal_data):
                 threaddb.commit()
 
                 aggregrate = True
-            #else:
+            else:
                 # Here we could inform the user about opened deals outside any cluster
+                logger.info(
+                    f"Deal {deal_data['id']}/{deal_data['pair']} on "
+                    f"bot \"{deal_data['bot_name']} started! This deal is not part ",
+                    f"of any configured cluster and this message is only informative.",
+                    True
+                )
         #else:
             # Here we could inform the user about deal updates (filled SO, trailing activated)
 

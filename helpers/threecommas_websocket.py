@@ -79,6 +79,8 @@ class ThreeCommasWebsocket:
         self.identifier = identifier
         self.seperate_thread = seperate_thread
 
+        _LOGGER.debug(f"Identifier: {self.identifier}")
+
     def __run_forever_rel_dispatcher(self):
         """
         Run forever websocket using dispatcher rel
@@ -148,7 +150,8 @@ class ThreeCommasWebsocket:
         """
         On message event
         """
-        # _LOGGER.debug(f"Websocket data: {message}")
+        _LOGGER.debug(f"Websocket data: {message}")
+
         try:
             message = json.loads(message)
             if "type" not in message:
@@ -167,8 +170,8 @@ class ThreeCommasWebsocket:
                 _LOGGER.debug("Subscribing to the %s", self.identifier['channel'])
                 self.websocket.send(
                     json.dumps({
-                        "command": "subscribe",
                             "identifier": json.dumps(self.identifier),
+                            "command": "subscribe"
                         }
                     )
                 )
