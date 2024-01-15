@@ -78,10 +78,10 @@ def process_tv_section(section_id):
 
     cs = tvs.CryptoScreener()
     cs.set_range(0, 500)
-    cs.add_filter(CryptoField.EXCHANGE, FilterOperator.MATCH, 'BYBIT')
-    cs.add_filter(CryptoField.TECHNICAL_RATING, FilterOperator.IN_RANGE, [0.1, 1.0]) # buy and strong buy
+    #cs.add_filter(CryptoField.EXCHANGE, FilterOperator.MATCH, 'BYBIT')
+    #cs.add_filter(CryptoField.TECHNICAL_RATING, FilterOperator.IN_RANGE, [0.1, 1.0])
     cs.search("usdt.p")
-    cs.sort_by(CryptoField.VOLATILITY, ascending=False)
+    #cs.sort_by(CryptoField.VOLATILITY, ascending=False)
 
     df = cs.get(time_interval=TimeInterval.FOUR_HOURS, print_request=False)
     
@@ -95,39 +95,49 @@ def process_tv_section(section_id):
         counter += 1
 
         symbol = row["Name"]
+        exchange = row["Exchange"]
         volatility = row["Volatility"]
         change_onehour = row["Change 1h, %"]
         change_fourhour = row["Change %"]
         change_oneweek = row["Change 1W, %"]
         volume_change_oneday = row["Volume 24h Change %"]
         volume_fourhour = row["Volume"]
+        technical_rating = row["Technical Rating"]
 
-        logger.info(
-            f"{symbol}: volatility: {volatility} - "
+        if exchange != "BYBIT":
+            continue
+
+        if technical_rating <= 0.1:
+            continue;
+
+        logger.debug(
+            f"{symbol} / {exchange}: volatility: {volatility} - "
             f"Change % 1h {change_onehour}, 4h: {change_fourhour}, 1W: {change_oneweek} - "
-            f"Volume 4h: {volume_fourhour}, change % 1D: {volume_change_oneday}."
+            f"Volume 4h: {volume_fourhour}, change % 1D: {volume_change_oneday} - "
+            f"Technical Rating: {technical_rating}."
         )
 
         valid = True
+        if volatility < 15.0:
+            valid = False
+            logger.debug(f"{symbol} excluded based on low volatility %")
+
         if change_onehour <= 0.0 and (change_fourhour <= 0.0 or change_oneweek <= 0.0):
             valid = False
-            logger.info(f"{symbol} excluded based on negative change %")
+            logger.debug(f"{symbol} excluded based on negative change %")
 
         if volume_change_oneday > 1000.0:
             valid = False
-            logger.info(f"{symbol} excluded based on daily volume change")
+            logger.debug(f"{symbol} excluded based on daily volume change")
 
         if volume_fourhour <= 10000000.0:
             valid = False
-            logger.info(f"{symbol} excluded based on low trading volume")
+            logger.debug(f"{symbol} excluded based on low trading volume")
 
         if valid:
             choices.append(symbol)
 
-        if counter >= 15:
-            break
-
-    logger.info(f"Remy!!!! is going to choose from {choices}...")
+    logger.info(f"Remy!!!! is going to choose from {choices}...", True)
 
     return botsupdated
 
