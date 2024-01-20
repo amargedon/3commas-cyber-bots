@@ -122,11 +122,19 @@ def process_tv_section(section_id):
             valid = False
             logger.debug(f"{symbol} excluded based on low volatility %")
 
-        if change_onehour <= 0.0 and (change_fourhour <= 0.0 or change_oneweek <= 0.0):
+        if 5.0 <= change_oneweek >= 30.0:
             valid = False
-            logger.debug(f"{symbol} excluded based on negative change %")
+            logger.debug(f"{symbol} excluded based on change 1W {change_oneweek}%")
 
-        if volume_change_oneday > 1000.0:
+        if -2.0 >= change_fourhour <= 10.0:
+            valid = False
+            logger.debug(f"{symbol} excluded based on change 4h {change_fourhour}%")
+
+        if -4.0 >= change_onehour <= 7.5:
+            valid = False
+            logger.debug(f"{symbol} excluded based on change 1h {change_onehour}%")
+
+        if volume_change_oneday > 1500.0:
             valid = False
             logger.debug(f"{symbol} excluded based on daily volume change")
 
