@@ -2,6 +2,7 @@
 """Cyberjunky's 3Commas bot helpers."""
 import argparse
 import configparser
+from datetime import datetime
 #import json
 import os
 import sys
@@ -84,11 +85,15 @@ def process_tv_section(section_id):
     #cs.sort_by(CryptoField.VOLATILITY, ascending=False)
 
     df = cs.get(time_interval=TimeInterval.FOUR_HOURS, print_request=False)
-    
-    #for column_headers in df.columns: 
+
+    #for column_headers in df.columns:
     #    print(column_headers)
 
-    choices = []
+    currentDateTime = datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
+    df.to_csv(f"{datadir}/logs/dataframe-{currentDateTime}.csv", sep=';', index=True, encoding='utf-8')
+
+    buychoices = []
+    strongbuychoices = []
     counter = 0
     # loop through the rows using iterrows()
     for index, row in df.iterrows():
@@ -108,7 +113,7 @@ def process_tv_section(section_id):
             continue
 
         if technical_rating <= 0.1:
-            continue;
+            continue
 
         logger.debug(
             f"{symbol} / {exchange}: volatility: {volatility} - "
@@ -118,34 +123,37 @@ def process_tv_section(section_id):
         )
 
         valid = True
-        if volatility < 15.0:
+        if volatility < 12.5:
             valid = False
-            logger.debug(f"{symbol} excluded based on low volatility %")
+            logger.debug(f"{symbol} excluded based on low volatility {volatility:.2f}%")
 
-        if 5.0 <= change_oneweek >= 30.0:
+        if not 5.0 < change_oneweek < 35.0:
             valid = False
-            logger.debug(f"{symbol} excluded based on change 1W {change_oneweek}%")
+            logger.debug(f"{symbol} excluded based on change 1W {change_oneweek:.2f}%")
 
-        if -2.0 >= change_fourhour <= 10.0:
+        if not -2.0 < change_fourhour < 12.5:
             valid = False
-            logger.debug(f"{symbol} excluded based on change 4h {change_fourhour}%")
+            logger.debug(f"{symbol} excluded based on change 4h {change_fourhour:.2f}%")
 
-        if -4.0 >= change_onehour <= 7.5:
+        if not -4.0 < change_onehour < 5.0:
             valid = False
-            logger.debug(f"{symbol} excluded based on change 1h {change_onehour}%")
+            logger.debug(f"{symbol} excluded based on change 1h {change_onehour:.2f}%")
 
-        if volume_change_oneday > 1500.0:
+        if not -20 < volume_change_oneday < 1500.0:
             valid = False
-            logger.debug(f"{symbol} excluded based on daily volume change")
+            logger.debug(f"{symbol} excluded based on daily volume change {volume_change_oneday:.2f}%")
 
-        if volume_fourhour <= 10000000.0:
+        if volume_fourhour < 5000000.0:
             valid = False
-            logger.debug(f"{symbol} excluded based on low trading volume")
+            logger.debug(f"{symbol} excluded based on low trading volume {volume_fourhour / 1000000}M")
 
         if valid:
-            choices.append(symbol)
+            if technical_rating >= 0.5:
+                strongbuychoices.append(symbol)
+            else:
+                buychoices.append(symbol)
 
-    logger.info(f"Remy!!!! is going to choose from {choices}...", True)
+    logger.info(f"Remy!!!! is going to choose from {strongbuychoices}, {buychoices}...", True)
 
     return botsupdated
 
