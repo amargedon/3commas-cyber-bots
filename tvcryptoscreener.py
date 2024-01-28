@@ -3,6 +3,7 @@
 import argparse
 import configparser
 from datetime import datetime
+import json
 #import json
 import os
 import sys
@@ -78,10 +79,11 @@ def process_tv_section(section_id):
     #botids = json.loads(config.get(section_id, "botids"))
 
     cs = tvs.CryptoScreener()
-    cs.set_range(0, 500)
+    cs.set_range(0, 3250)
     #cs.add_filter(CryptoField.EXCHANGE, FilterOperator.MATCH, 'BYBIT')
     #cs.add_filter(CryptoField.TECHNICAL_RATING, FilterOperator.IN_RANGE, [0.1, 1.0])
-    cs.search("usdt.p")
+    #cs.search("usdt.p")
+    cs.search("perpetual")
     #cs.sort_by(CryptoField.VOLATILITY, ascending=False)
 
     df = cs.get(time_interval=TimeInterval.FOUR_HOURS, print_request=False)
@@ -90,15 +92,19 @@ def process_tv_section(section_id):
     #    print(column_headers)
 
     currentDateTime = datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
-    df.to_csv(f"{datadir}/logs/dataframe-{currentDateTime}.csv", sep=';', index=True, encoding='utf-8')
+    df.to_csv(f"{datadir}/logs/dataframe-full-{currentDateTime}.csv", sep=';', index=True, encoding='utf-8')
+
+    df1 = df.loc[df["Exchange"] == "BYBIT" ]
+    df2 = df1.loc[df1["Technical Rating"] > 0.1 ]
+    df3 = df2.sort_values(by = ["Volatility", "Technical Rating"], ascending = False)
+    df_filtered = df3
+
+    df_filtered.to_csv(f"{datadir}/logs/dataframe-filtered-{currentDateTime}.csv", sep=';', index=True, encoding='utf-8')
 
     buychoices = []
     strongbuychoices = []
-    counter = 0
     # loop through the rows using iterrows()
-    for index, row in df.iterrows():
-        counter += 1
-
+    for _, row in df_filtered.iterrows():
         symbol = row["Name"]
         exchange = row["Exchange"]
         volatility = row["Volatility"]
@@ -108,12 +114,6 @@ def process_tv_section(section_id):
         volume_change_oneday = row["Volume 24h Change %"]
         volume_fourhour = row["Volume"]
         technical_rating = row["Technical Rating"]
-
-        if exchange != "BYBIT":
-            continue
-
-        if technical_rating <= 0.1:
-            continue
 
         logger.debug(
             f"{symbol} / {exchange}: volatility: {volatility} - "
@@ -127,7 +127,7 @@ def process_tv_section(section_id):
             valid = False
             logger.debug(f"{symbol} excluded based on low volatility {volatility:.2f}%")
 
-        if not 5.0 < change_oneweek < 35.0:
+        if not 2.0 < change_oneweek < 35.0:
             valid = False
             logger.debug(f"{symbol} excluded based on change 1W {change_oneweek:.2f}%")
 
@@ -149,13 +149,48 @@ def process_tv_section(section_id):
 
         if valid:
             if technical_rating >= 0.5:
-                strongbuychoices.append(symbol)
+                strongbuychoices.append(symbol.replace("USDT.P", ""))
             else:
-                buychoices.append(symbol)
+                buychoices.append(symbol.replace("USDT.P", ""))
 
     logger.info(f"Remy!!!! is going to choose from {strongbuychoices}, {buychoices}...", True)
 
+    process_for_storage(strongbuychoices, buychoices)
+
     return botsupdated
+
+
+def process_for_storage(strong_buy_coins, buy_coins):
+    """Process the coin and store it"""
+
+    pairdata = {
+        "pairs": []
+    }
+
+    baselist = ["USDT"]
+    for coin in strong_buy_coins:
+        for base in baselist:
+            pair = f"{coin}/{base}:USDT"
+            pairdata["pairs"].append(pair)
+
+    for coin in buy_coins:
+        for base in baselist:
+            pair = f"{coin}/{base}:USDT"
+            pairdata["pairs"].append(pair)
+
+    filename = f"{sharedir}/tradepairs_volatile.json"
+
+    # Serializing json
+    json_object = json.dumps(pairdata, indent = 2)
+
+    # Writing to sample.json
+    with open(filename, "w") as outfile:
+        outfile.write(json_object)
+
+    logger.debug(
+        f"Wrote {len(pairdata['pairs'])} coins to {filename}."
+    )
+
 
 
 # Start application
@@ -167,11 +202,20 @@ parser.add_argument(
     "-d", "--datadir", help="directory to use for config and logs files", type=str
 )
 
+parser.add_argument(
+    "-s", "--sharedir", help="directory to use for shared files", type=str
+)
+
 args = parser.parse_args()
 if args.datadir:
     datadir = args.datadir
 else:
     datadir = os.getcwd()
+
+if args.sharedir:
+    sharedir = args.sharedir
+else:
+    sharedir = None
 
 # Create or load configuration file
 config = load_config()
