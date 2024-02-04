@@ -53,6 +53,8 @@ def format_pair(marketcode, base, coin):
         pair = f"{base}_{coin}{base}"
     elif marketcode == "ftx_futures":
         pair = f"{base}_{coin}-PERP"
+    elif "perpetual" in marketcode:
+        pair = f"{base}_{coin}{base}"
     else:
         pair = f"{base}_{coin}"
 
