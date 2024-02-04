@@ -123,7 +123,7 @@ def process_tv_section(section_id):
         )
 
         valid = True
-        if volatility < 12.5:
+        if volatility < 10.0:
             valid = False
             logger.debug(f"{symbol} excluded based on low volatility {volatility:.2f}%")
 
@@ -131,7 +131,7 @@ def process_tv_section(section_id):
             valid = False
             logger.debug(f"{symbol} excluded based on change 1W {change_oneweek:.2f}%")
 
-        if not -2.0 < change_fourhour < 12.5:
+        if not -4.0 < change_fourhour < 12.5:
             valid = False
             logger.debug(f"{symbol} excluded based on change 4h {change_fourhour:.2f}%")
 
