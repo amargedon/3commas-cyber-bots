@@ -8,6 +8,9 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
+import tvscreener as tvs
+from tvscreener import TimeInterval
+
 from helpers.database import get_next_process_time, set_next_process_time
 
 from helpers.logging import Logger, NotificationHandler
@@ -65,6 +68,7 @@ def load_config():
         "altrank": [],
         "galaxyscore": [],
         "percent-change-1h": [],
+        "percent-change-4h": [],
         "percent-change-24h": [],
         "percent-change-7d": [],
         "percent-change-14d": [],
@@ -72,6 +76,9 @@ def load_config():
         "percent-change-200d": [],
         "percent-change-1y": [],
         "volatility-24h": [],
+        "volume": [],
+        "volume-change-24h": [],
+        "technical-rating": [],
         "condition": json.dumps(cfgconditionconfig),
         "coin-whitelist": [],
         "coin-blacklist": [],
@@ -143,6 +150,17 @@ def upgrade_config(cfg):
                 cfg.write(cfgfile)
 
             logger.info("Upgraded section %s to have notify option" % cfgsection)
+
+        if not cfg.has_option(cfgsection, "percent-change-4h"):
+            cfg.set(cfgsection, "percent-change-4h", "[]")
+            cfg.set(cfgsection, "volume", "[]")
+            cfg.set(cfgsection, "volume-change-24h", "[]")
+            cfg.set(cfgsection, "technical-rating", "[]")
+
+            with open(f"{datadir}/{program}.ini", "w+") as cfgfile:
+                cfg.write(cfgfile)
+
+            logger.info("Upgraded section %s to have extended TV conditions" % cfgsection)
 
     if not cfg.has_option("settings", "3c-apikey-path"):
         cfg.set("settings", "3c-apikey-path", "")
@@ -269,6 +287,7 @@ def process_bu_section(section_id):
 
     pricefilter = {}
     pricefilter["change_1h"] = json.loads(config.get(section_id, "percent-change-1h"))
+    pricefilter["change_4h"] = json.loads(config.get(section_id, "percent-change-4h"))
     pricefilter["change_24h"] = json.loads(config.get(section_id, "percent-change-24h"))
     pricefilter["change_7d"] = json.loads(config.get(section_id, "percent-change-7d"))
     pricefilter["change_14d"] = json.loads(config.get(section_id, "percent-change-14d"))
@@ -276,6 +295,9 @@ def process_bu_section(section_id):
     pricefilter["change_200d"] = json.loads(config.get(section_id, "percent-change-200d"))
     pricefilter["change_1y"] = json.loads(config.get(section_id, "percent-change-1y"))
     pricefilter["volatility_24h"] = json.loads(config.get(section_id, "volatility-24h"))
+    pricefilter["volume"] = json.loads(config.get(section_id, "volume"))
+    pricefilter["volume-change_24h"] = json.loads(config.get(section_id, "volume-change-24h"))
+    pricefilter["technical_rating"] = json.loads(config.get(section_id, "technical-rating"))
     filteroptions["change"] = pricefilter
 
     # Ugly way to read the coinlists from the configuration
@@ -295,7 +317,9 @@ def process_bu_section(section_id):
     # Coindata contains:
     # 0: total number of coins available
     # 1: list of coins after filtering
-    coindata = get_coins_from_market_data(base, filteroptions)
+    # TODO: TV data should move to MarketCollector
+    #coindata = get_coins_from_market_data(base, filteroptions)
+    coindata = get_coins_from_tradingview_data(base, filteroptions)
 
     logger.debug(
         f"Fetched {len(coindata[1])} coins from the marketdata database."
@@ -637,6 +661,75 @@ def get_coins_from_market_data(base, filteroptions):
         )
 
     return sharedcursor.execute(countquery).fetchone(), sharedcursor.execute(query).fetchall()
+
+
+def get_coins_from_tradingview_data(base, filteroptions):
+    """Get pairs based on the specified filtering"""
+
+    cs = tvs.CryptoScreener()
+    cs.set_range(0, 3250)
+    cs.search("perpetual")
+
+    df = cs.get(time_interval=TimeInterval.FOUR_HOURS, print_request=False)
+
+    df1 = df.loc[df["Exchange"] == "BYBIT" ]
+    df_filtered = df1
+
+    coins = list()
+    # loop through the rows using iterrows()
+    for _, row in df_filtered.iterrows():
+        symbol = row["Name"]
+        exchange = row["Exchange"]
+        volatility = row["Volatility"]
+        change_onehour = row["Change 1h, %"]
+        change_fourhour = row["Change %"]
+        change_oneweek = row["Change 1W, %"]
+        volume_change_oneday = row["Volume 24h Change %"]
+        volume_fourhour = row["Volume"]
+        technical_rating = row["Technical Rating"]
+
+        logger.debug(
+            f"{symbol} / {exchange}: volatility: {volatility} - "
+            f"Change % 1h {change_onehour}, 4h: {change_fourhour}, 1W: {change_oneweek} - "
+            f"Volume 4h: {volume_fourhour}, change % 1D: {volume_change_oneday} - "
+            f"Technical Rating: {technical_rating}."
+        )
+
+        valid = True
+        if not filteroptions["change"]["volatility_24h"][0] < volatility < filteroptions["change"]["volatility_24h"][-1]:
+            valid = False
+            logger.debug(f"{symbol} excluded based on low volatility {volatility:.2f}%")
+
+        if not filteroptions["change"]["change_7d"][0] < change_oneweek < filteroptions["change"]["change_7d"][-1]:
+            valid = False
+            logger.debug(f"{symbol} excluded based on change 1W {change_oneweek:.2f}%")
+
+        if not filteroptions["change"]["change_4h"][0] < change_fourhour < filteroptions["change"]["change_4h"][-1]:
+            valid = False
+            logger.debug(f"{symbol} excluded based on change 4h {change_fourhour:.2f}%")
+
+        if not filteroptions["change"]["change_1h"][0] < change_onehour < filteroptions["change"]["change_1h"][-1]:
+            valid = False
+            logger.debug(f"{symbol} excluded based on change 1h {change_onehour:.2f}%")
+
+        if not filteroptions["change"]["volume-change_24h"][0] < volume_change_oneday < filteroptions["change"]["volume-change_24h"][-1]:
+            valid = False
+            logger.debug(f"{symbol} excluded based on daily volume change {volume_change_oneday:.2f}%")
+
+        if not filteroptions["change"]["volume"][0] < volume_fourhour < filteroptions["change"]["volume"][-1]:
+            valid = False
+            logger.debug(f"{symbol} excluded based on low trading volume {volume_fourhour / 1000000}M")
+
+        if not filteroptions["change"]["technical_rating"][0] < technical_rating < filteroptions["change"]["technical_rating"][-1]:
+            valid = False
+            logger.debug(f"{symbol} excluded based on technical rating {technical_rating}")
+
+        if valid:
+            coin = []
+            coin.append(symbol.replace("USDT.P", ""))
+            coins.append(coin)
+
+    return [len(coins)], coins
 
 
 def create_change_condition(filteroptions):
