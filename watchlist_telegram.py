@@ -234,7 +234,10 @@ def parse_smarttrade_event(source, event_data):
         True
     )
 
-    currentprice = float(get_threecommas_currency_rate(logger, api, "binance", pair))
+    currentprice = nan
+    currency_data = float(get_threecommas_currency_rate(logger, api, "binance", pair))
+    if "last" in currency_data:
+        currentprice = currency_data["last"]
 
     direction = get_smarttrade_direction(targets)
     logger.info(
