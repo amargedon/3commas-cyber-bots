@@ -23,6 +23,7 @@ from helpers.misc import (
 )
 from helpers.threecommas import (
     control_threecommas_bots,
+    get_threecommas_currency_rate,
     get_threecommas_market,
     get_threecommas_account_marketcode,
     init_threecommas_api,
@@ -406,8 +407,7 @@ def update_bot_pairs(section_id, base, botdata, coindata, condition_state):
         )
 
         # No data available, stop the bot if allowed to
-        if allowbotstopstart:
-            handle_bot_stopstart(botdata, 0, condition_state)
+        handle_bot_stopstart(botdata, 0, condition_state, allowbotstopstart)
 
         botupdated = True
         return botupdated
@@ -427,6 +427,7 @@ def update_bot_pairs(section_id, base, botdata, coindata, condition_state):
     newpairs = list()
     badpairs = list()
     blackpairs = list()
+    invalidleveragepairs = list()
 
     # Get marketcode (exchange) from account
     marketcode = marketcodecache.get(botdata["id"])
@@ -467,6 +468,7 @@ def update_bot_pairs(section_id, base, botdata, coindata, condition_state):
         )
 
     # Process list of coins
+    # Check availability and blacklist
     for coin in coindata[1]:
         try:
             # Construct pair based on bot settings and marketcode
@@ -485,9 +487,65 @@ def update_bot_pairs(section_id, base, botdata, coindata, condition_state):
             )
             return botupdated
 
+    # Process list of coins
+    # Check available leverage
+    if "futures" in marketcode or "perpetual" in marketcode:
+        for pair in newpairs:
+            validleverage = False
+
+            minleverage = -1.0
+            maxleverage = -1.0
+
+            # Try to get the leverage values from the cache
+            if pair in pairleveragecache:
+                minleverage = pairleveragecache[pair]["min"]
+                maxleverage = pairleveragecache[pair]["max"]
+            else:
+                # Fetch data from 3Commas and store in the cache
+                currencydata = get_threecommas_currency_rate(logger, api, marketcode, pair)
+
+                if "minLeverage" in currencydata and "maxLeverage" in currencydata:
+                    minleverage = currencydata["minLeverage"]
+                    maxleverage = currencydata["maxLeverage"]
+
+                    leveragedata = {
+                        "min": minleverage,
+                        "max": maxleverage
+                    }
+                    pairleveragecache[pair] = leveragedata
+                else:
+                    logger.error(
+                        f"minLeverage and/or maxLeverage for pair {pair} are not present "
+                        f"in fetched 3C data!"
+                    )
+            if minleverage != -1 and maxleverage != -1:
+                if minleverage <= float(botdata["leverage_custom_value"]) <= maxleverage:
+                    logger.debug(
+                        f"Required leverage {botdata['leverage_custom_value']} supported for "
+                        f"pair {pair} (min: {minleverage}, max: {maxleverage})"
+                    )
+                    validleverage = True
+                else:
+                    logger.warning(
+                        f"Required leverage {botdata['leverage_custom_value']} not supported for "
+                        f"pair {pair} (min: {minleverage}, max: {maxleverage})"
+                    )
+            else:
+                logger.error(
+                    f"Invalid leverage data for pair {pair}!"
+                )
+
+            if not validleverage:
+                invalidleveragepairs.append(pair)
+
+        # And remove the invalid pairs from the list
+        for pair in invalidleveragepairs:
+            newpairs.remove(pair)
+
     logger.debug(
         f"Skipped blacklisted pairs: {blackpairs}. "
-        f"Skipped pairs not on {marketcode}: {badpairs}."
+        f"Skipped pairs not on {marketcode}: {badpairs}. "
+        f"Skipped invalid leverage pairs: {invalidleveragepairs}"
     )
 
     # If sharedir is set, other scripts could provide a file with pairs to exclude
@@ -503,11 +561,18 @@ def update_bot_pairs(section_id, base, botdata, coindata, condition_state):
     if allowmaxdealchange:
         newmaxdeals = determine_bot_maxactivedeals(botdata, paircount)
 
-    if allowbotstopstart:
-        handle_bot_stopstart(botdata, paircount, condition_state)
+    handle_bot_stopstart(botdata, paircount, condition_state, allowbotstopstart)
 
     # Update the bot with the new pairs
     if newpairs:
+        if botdata["type"] == "Bot::SingleBot" and len(newpairs) > 1:
+            # Slice the list as we only can have a single pair
+            logger.debug(
+                f"Truncated pairlist from {newpairs} to {newpairs[0]} because "
+                f"bot '{botdata['name']}' with id '{botdata['id']}' is a single bot"
+            )
+            newpairs = newpairs[0:1]
+
         botupdated = set_threecommas_bot_pairs(
             logger, api, botdata, newpairs, newmaxdeals, False, False
             )
@@ -523,10 +588,10 @@ def update_bot_pairs(section_id, base, botdata, coindata, condition_state):
         if botupdated and newpairs != botdata["pairs"]:
             excludedcount = abs(coindata[0][0] - len(coindata[1]))
             logger.info(
-                f"Bot '{botdata['name']}' with id '{botdata['id']}' updated with {paircount} "
+                f"Bot '{botdata['name']}' with id '{botdata['id']}' updated with {len(newpairs)} "
                 f"pairs ({newpairs[0]} ... {newpairs[-1]}). "
                 f"Excluded coins: {excludedcount} (filter), {len(blackpairs)} (blacklist), "
-                f"{len(badpairs)} (not on exchange)",
+                f"{len(badpairs)} (not on exchange), {len(invalidleveragepairs)} (leverage)",
                 config.getboolean(section_id, "notify-succesful-update")
             )
     else:
@@ -584,7 +649,7 @@ def determine_bot_maxactivedeals(botdata, paircount):
     return newmaxdeals
 
 
-def handle_bot_stopstart(botdata, paircount, condition_state):
+def handle_bot_stopstart(botdata, paircount, condition_state, allowed_stop_start):
     """Determine and handle bot stop and start"""
 
     logger.debug(
@@ -595,11 +660,25 @@ def handle_bot_stopstart(botdata, paircount, condition_state):
     if (paircount == 0 or not condition_state) and botdata["is_enabled"]:
         # No pairs or condition evaluation is False, and bot is
         # running (zero pairs not allowed), so stop it...
-        control_threecommas_bots(logger, api, botdata, "disable")
+        if allowed_stop_start:
+            control_threecommas_bots(logger, api, botdata, "disable")
+        else:
+            logger.warning(
+                f"Bot '{botdata['name']}' with id '{botdata['id']}' must be stopped, "
+                f"however not allowed by configuration. Make sure to "
+                f"monitor yourself!"
+            )
     elif paircount > 0 and condition_state and not botdata["is_enabled"]:
         # Valid pairs, condition evaluation is True and bot is
         # not running, so start it...
-        control_threecommas_bots(logger, api, botdata, "enable")
+        if allowed_stop_start:
+            control_threecommas_bots(logger, api, botdata, "enable")
+        else:
+            logger.warning(
+                f"Bot '{botdata['name']}' with id '{botdata['id']}' must be started, "
+                f"however not allowed by configuration. Make sure to "
+                f"monitor yourself!"
+            )
 
 
 def get_coins_from_market_data(base, filteroptions):
@@ -672,8 +751,12 @@ def get_coins_from_tradingview_data(base, filteroptions):
 
     df = cs.get(time_interval=TimeInterval.FOUR_HOURS, print_request=False)
 
+    # Hardcoded filter on exchange
     df1 = df.loc[df["Exchange"] == "BYBIT" ]
-    df_filtered = df1
+
+    # Hardcoded sort for now
+    df2 = df1.sort_values(by = ["Volatility", "Technical Rating"], ascending = False)
+    df_filtered = df2
 
     coins = list()
     # loop through the rows using iterrows()
@@ -863,6 +946,8 @@ marketcodecache = create_marketcode_cache()
 
 tickerlistcache = {}
 
+pairleveragecache = {}
+
 # Refresh coin pairs in 3C bots based on the market data
 while True:
 
@@ -877,11 +962,23 @@ while True:
     blacklist = load_blacklist(logger, api, blacklistfile)
 
     # Cache is used for one cycle, where we can optimize. But, we want to prevent
-    # working with old data so therefor the clear before each cycle
+    # working with old data so therefor clear before each cycle
     tickerlistcache.clear()
 
     # Current time to determine which sections to process
     starttime = int(time.time())
+
+    # Leverage data can change, make sure to invalidate the cache every 24h
+    cleantime = get_next_process_time(db, "sections", "sectionid", "cleanup")
+    if starttime >= cleantime or (
+            abs(cleantime - starttime) > (3600 * 24)
+    ):
+        logger.debug(
+            "Invalidate cached data..."
+        )
+        pairleveragecache.clear()
+        newtime = starttime + (3600 * 24)
+        set_next_process_time(db, "sections", "sectionid", "cleanup", newtime)
 
     for section in config.sections():
         if section.startswith("bu_"):
@@ -894,7 +991,7 @@ while True:
                     abs(nextprocesstime - starttime) > sectiontimeinterval
             ):
                 if not process_bu_section(section):
-                    # Update failed somewhere, retry soon
+                    # Update failed somewhere, retry in 60s
                     sectiontimeinterval = 60
 
                     logger.error(
