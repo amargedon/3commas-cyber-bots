@@ -124,7 +124,10 @@ def get_threecommas_btcusd(logger, api):
     """Get current USDT_BTC value to calculate BTC volume24h in USDT."""
 
     price = 20000.0
-    price = get_threecommas_currency_rate(logger, api, "binance", "USDT_BTC")
+    data = get_threecommas_currency_rate(logger, api, "binance", "USDT_BTC")
+
+    if "last" in data:
+        price = data["last"]
 
     return price
 
@@ -132,15 +135,14 @@ def get_threecommas_btcusd(logger, api):
 def get_threecommas_currency_rate(logger, api, market_code, pair):
     """Get current price of pair on selected market."""
 
-    price = nan
     error, data = api.request(
         entity="accounts",
         action="currency_rates",
         payload={"market_code": market_code, "pair": pair},
     )
     if data:
-        price = data["last"]
-        logger.info(f"Fetched 3Commas price OK ({pair} {price})")
+        logger.info(f"Fetched 3Commas currency data ({pair})")
+        return data
     else:
         if error and "msg" in error:
             logger.error(
@@ -149,7 +151,7 @@ def get_threecommas_currency_rate(logger, api, market_code, pair):
         else:
             logger.error(f"Fetching 3Commas price for {pair} failed")
 
-    return price
+    return None
 
 
 def get_threecommas_accounts(logger, api):
