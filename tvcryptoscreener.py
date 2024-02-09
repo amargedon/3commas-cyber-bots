@@ -112,6 +112,7 @@ def process_tv_section(section_id):
         change_fourhour = row["Change %"]
         change_oneweek = row["Change 1W, %"]
         volume_change_oneday = row["Volume 24h Change %"]
+        volume_usd_oneday = row["Volume 24h in USD"]
         volume_fourhour = row["Volume"]
         technical_rating = row["Technical Rating"]
 
@@ -145,7 +146,11 @@ def process_tv_section(section_id):
 
         if volume_fourhour < 5000000.0:
             valid = False
-            logger.debug(f"{symbol} excluded based on low trading volume {volume_fourhour / 1000000}M")
+            logger.debug(f"{symbol} excluded based on low coin trading volume {volume_fourhour / 1000000}M")
+
+        if volume_usd_oneday < 7500000.0:
+            valid = False
+            logger.debug(f"{symbol} excluded based on low USD trading volume {volume_usd_oneday / 1000000}M")
 
         if valid:
             if technical_rating >= 0.5:
@@ -170,12 +175,14 @@ def process_for_storage(strong_buy_coins, buy_coins):
     baselist = ["USDT"]
     for coin in strong_buy_coins:
         for base in baselist:
-            pair = f"{coin}/{base}:USDT"
+            #pair = f"{coin}/{base}:USDT"
+            pair = f"{coin}/{base}"
             pairdata["pairs"].append(pair)
 
     for coin in buy_coins:
         for base in baselist:
-            pair = f"{coin}/{base}:USDT"
+            #pair = f"{coin}/{base}:USDT"
+            pair = f"{coin}/{base}"
             pairdata["pairs"].append(pair)
 
     filename = f"{sharedir}/tradepairs_volatile.json"
