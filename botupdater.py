@@ -78,6 +78,7 @@ def load_config():
         "percent-change-1y": [],
         "volatility-24h": [],
         "volume": [],
+        "volume-usd-24h": [],
         "volume-change-24h": [],
         "technical-rating": [],
         "condition": json.dumps(cfgconditionconfig),
@@ -155,6 +156,7 @@ def upgrade_config(cfg):
         if not cfg.has_option(cfgsection, "percent-change-4h"):
             cfg.set(cfgsection, "percent-change-4h", "[]")
             cfg.set(cfgsection, "volume", "[]")
+            cfg.set(cfgsection, "volume-usd-24h", "[]")
             cfg.set(cfgsection, "volume-change-24h", "[]")
             cfg.set(cfgsection, "technical-rating", "[]")
 
@@ -297,6 +299,7 @@ def process_bu_section(section_id):
     pricefilter["change_1y"] = json.loads(config.get(section_id, "percent-change-1y"))
     pricefilter["volatility_24h"] = json.loads(config.get(section_id, "volatility-24h"))
     pricefilter["volume"] = json.loads(config.get(section_id, "volume"))
+    pricefilter["volume-usd_24h"] = json.loads(config.get(section_id, "volume-usd-24h"))
     pricefilter["volume-change_24h"] = json.loads(config.get(section_id, "volume-change-24h"))
     pricefilter["technical_rating"] = json.loads(config.get(section_id, "technical-rating"))
     filteroptions["change"] = pricefilter
@@ -496,10 +499,13 @@ def update_bot_pairs(section_id, base, botdata, coindata, condition_state):
             minleverage = -1.0
             maxleverage = -1.0
 
+            source = "undefined"
+
             # Try to get the leverage values from the cache
             if pair in pairleveragecache:
                 minleverage = pairleveragecache[pair]["min"]
                 maxleverage = pairleveragecache[pair]["max"]
+                source = "cache"
             else:
                 # Fetch data from 3Commas and store in the cache
                 currencydata = get_threecommas_currency_rate(logger, api, marketcode, pair)
@@ -513,22 +519,24 @@ def update_bot_pairs(section_id, base, botdata, coindata, condition_state):
                         "max": maxleverage
                     }
                     pairleveragecache[pair] = leveragedata
+                    source = "3C"
                 else:
                     logger.error(
                         f"minLeverage and/or maxLeverage for pair {pair} are not present "
                         f"in fetched 3C data!"
                     )
+
             if minleverage != -1 and maxleverage != -1:
                 if minleverage <= float(botdata["leverage_custom_value"]) <= maxleverage:
                     logger.debug(
                         f"Required leverage {botdata['leverage_custom_value']} supported for "
-                        f"pair {pair} (min: {minleverage}, max: {maxleverage})"
+                        f"pair {pair} (min: {minleverage}, max: {maxleverage}) (from {source})"
                     )
                     validleverage = True
                 else:
                     logger.warning(
                         f"Required leverage {botdata['leverage_custom_value']} not supported for "
-                        f"pair {pair} (min: {minleverage}, max: {maxleverage})"
+                        f"pair {pair} (min: {minleverage}, max: {maxleverage}) (from {source})"
                     )
             else:
                 logger.error(
@@ -768,13 +776,14 @@ def get_coins_from_tradingview_data(base, filteroptions):
         change_fourhour = row["Change %"]
         change_oneweek = row["Change 1W, %"]
         volume_change_oneday = row["Volume 24h Change %"]
+        volume_usd_oneday = row["Volume 24h in USD"]
         volume_fourhour = row["Volume"]
         technical_rating = row["Technical Rating"]
 
         logger.debug(
             f"{symbol} / {exchange}: volatility: {volatility} - "
             f"Change % 1h {change_onehour}, 4h: {change_fourhour}, 1W: {change_oneweek} - "
-            f"Volume 4h: {volume_fourhour}, change % 1D: {volume_change_oneday} - "
+            f"Volume 4h: {volume_fourhour}, change % 1D: {volume_change_oneday}, $ 1D: {volume_usd_oneday} - "
             f"Technical Rating: {technical_rating}."
         )
 
@@ -799,9 +808,13 @@ def get_coins_from_tradingview_data(base, filteroptions):
             valid = False
             logger.debug(f"{symbol} excluded based on daily volume change {volume_change_oneday:.2f}%")
 
+        if not filteroptions["change"]["volume-usd_24h"][0] < volume_usd_oneday < filteroptions["change"]["volume-usd_24h"][-1]:
+            valid = False
+            logger.debug(f"{symbol} excluded based on daily USD volume {volume_usd_oneday / 1000000}M")
+
         if not filteroptions["change"]["volume"][0] < volume_fourhour < filteroptions["change"]["volume"][-1]:
             valid = False
-            logger.debug(f"{symbol} excluded based on low trading volume {volume_fourhour / 1000000}M")
+            logger.debug(f"{symbol} excluded based on low coin volume {volume_fourhour / 1000000}M")
 
         if not filteroptions["change"]["technical_rating"][0] < technical_rating < filteroptions["change"]["technical_rating"][-1]:
             valid = False
