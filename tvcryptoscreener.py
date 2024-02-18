@@ -83,7 +83,7 @@ def process_tv_section(section_id):
     #cs.add_filter(CryptoField.EXCHANGE, FilterOperator.MATCH, 'BYBIT')
     #cs.add_filter(CryptoField.TECHNICAL_RATING, FilterOperator.IN_RANGE, [0.1, 1.0])
     #cs.search("usdt.p")
-    cs.search("perpetual")
+    #cs.search("perpetual")
     #cs.sort_by(CryptoField.VOLATILITY, ascending=False)
 
     df = cs.get(time_interval=TimeInterval.FOUR_HOURS, print_request=False)
@@ -95,9 +95,10 @@ def process_tv_section(section_id):
     df.to_csv(f"{datadir}/logs/dataframe-full-{currentDateTime}.csv", sep=';', index=True, encoding='utf-8')
 
     df1 = df.loc[df["Exchange"] == "BYBIT" ]
-    df2 = df1.loc[df1["Technical Rating"] > 0.1 ]
-    df3 = df2.sort_values(by = ["Volatility", "Technical Rating"], ascending = False)
-    df_filtered = df3
+    df2 = df1.loc[df1["Type"] == "spot" ]
+    df3 = df2.loc[df2["Technical Rating"] > 0.1 ]
+    df4 = df3.sort_values(by = ["Volatility", "Technical Rating"], ascending = False)
+    df_filtered = df4
 
     df_filtered.to_csv(f"{datadir}/logs/dataframe-filtered-{currentDateTime}.csv", sep=';', index=True, encoding='utf-8')
 
@@ -128,7 +129,7 @@ def process_tv_section(section_id):
             valid = False
             logger.debug(f"{symbol} excluded based on low volatility {volatility:.2f}%")
 
-        if not 2.0 < change_oneweek < 35.0:
+        if not 2.0 < change_oneweek < 50.0:
             valid = False
             logger.debug(f"{symbol} excluded based on change 1W {change_oneweek:.2f}%")
 
@@ -136,7 +137,7 @@ def process_tv_section(section_id):
             valid = False
             logger.debug(f"{symbol} excluded based on change 4h {change_fourhour:.2f}%")
 
-        if not -4.0 < change_onehour < 5.0:
+        if not -4.0 < change_onehour < 7.5:
             valid = False
             logger.debug(f"{symbol} excluded based on change 1h {change_onehour:.2f}%")
 
@@ -144,19 +145,19 @@ def process_tv_section(section_id):
             valid = False
             logger.debug(f"{symbol} excluded based on daily volume change {volume_change_oneday:.2f}%")
 
-        if volume_fourhour < 5000000.0:
+        if volume_fourhour < 500000.0:
             valid = False
             logger.debug(f"{symbol} excluded based on low coin trading volume {volume_fourhour / 1000000}M")
 
-        if volume_usd_oneday < 7500000.0:
+        if volume_usd_oneday < 1000000.0:
             valid = False
             logger.debug(f"{symbol} excluded based on low USD trading volume {volume_usd_oneday / 1000000}M")
 
         if valid:
             if technical_rating >= 0.5:
-                strongbuychoices.append(symbol.replace("USDT.P", ""))
+                strongbuychoices.append(symbol.replace("USDT", ""))
             else:
-                buychoices.append(symbol.replace("USDT.P", ""))
+                buychoices.append(symbol.replace("USDT", ""))
 
     logger.info(f"Remy!!!! is going to choose from {strongbuychoices}, {buychoices}...", True)
 
