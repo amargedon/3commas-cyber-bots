@@ -79,7 +79,7 @@ def process_tv_section(section_id):
     #botids = json.loads(config.get(section_id, "botids"))
 
     cs = tvs.CryptoScreener()
-    cs.set_range(0, 3250)
+    cs.set_range(0, 5000)
     #cs.add_filter(CryptoField.EXCHANGE, FilterOperator.MATCH, 'BYBIT')
     #cs.add_filter(CryptoField.TECHNICAL_RATING, FilterOperator.IN_RANGE, [0.1, 1.0])
     #cs.search("usdt.p")
@@ -91,16 +91,21 @@ def process_tv_section(section_id):
     #for column_headers in df.columns:
     #    print(column_headers)
 
-    currentDateTime = datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
-    df.to_csv(f"{datadir}/logs/dataframe-full-{currentDateTime}.csv", sep=';', index=True, encoding='utf-8')
+    #currentDateTime = datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
+    #df.to_csv(f"{datadir}/logs/dataframe-full-{currentDateTime}.csv", sep=';', index=True, encoding='utf-8')
 
     df1 = df.loc[df["Exchange"] == "BYBIT" ]
     df2 = df1.loc[df1["Type"] == "spot" ]
     df3 = df2.loc[df2["Technical Rating"] > 0.1 ]
-    df4 = df3.sort_values(by = ["Volatility", "Technical Rating"], ascending = False)
-    df_filtered = df4
+    df4 = df3.loc[df3["Volatility"] > 7.5 ]
+    df5 = df4.sort_values(by = ["Volatility", "Technical Rating"], ascending = False)
+    df_filtered = df5
 
-    df_filtered.to_csv(f"{datadir}/logs/dataframe-filtered-{currentDateTime}.csv", sep=';', index=True, encoding='utf-8')
+    avgvolatility = (df_filtered.loc[:, "Volatility"].mean()) * 0.8
+
+    #df_filtered.to_csv(f"{datadir}/logs/dataframe-filtered-{currentDateTime}.csv", sep=';', index=True, encoding='utf-8')
+
+    leveragecoins = [".2S", ".3S", ".2L", ".3L"]
 
     buychoices = []
     strongbuychoices = []
@@ -124,28 +129,36 @@ def process_tv_section(section_id):
             f"Technical Rating: {technical_rating}."
         )
 
-        valid = True
-        if volatility < 10.0:
-            valid = False
-            logger.debug(f"{symbol} excluded based on low volatility {volatility:.2f}%")
+        if "USDC" in symbol:
+            logger.debug(f"{symbol} skipped because of USDC market")
+            continue
 
-        if not 2.0 < change_oneweek < 50.0:
+        if any(lc in symbol for lc in leveragecoins):
+            logger.debug(f"{symbol} skipped because of leverage coin")
+            continue
+
+        valid = True
+        if volatility < avgvolatility:
+            valid = False
+            logger.debug(f"{symbol} excluded based on lower volatility {volatility:.2f}% than average {avgvolatility:.2f}%")
+
+        if not -10.0 < change_oneweek < 75.0:
             valid = False
             logger.debug(f"{symbol} excluded based on change 1W {change_oneweek:.2f}%")
 
-        if not -4.0 < change_fourhour < 12.5:
+        if not -6.0 < change_fourhour < 25.0:
             valid = False
             logger.debug(f"{symbol} excluded based on change 4h {change_fourhour:.2f}%")
 
-        if not -4.0 < change_onehour < 7.5:
+        if not -4.0 < change_onehour < 15.0:
             valid = False
             logger.debug(f"{symbol} excluded based on change 1h {change_onehour:.2f}%")
 
-        if not -20 < volume_change_oneday < 1500.0:
-            valid = False
-            logger.debug(f"{symbol} excluded based on daily volume change {volume_change_oneday:.2f}%")
+        #if not -25 < volume_change_oneday < 1750.0:
+        #    valid = False
+        #    logger.debug(f"{symbol} excluded based on daily volume change {volume_change_oneday:.2f}%")
 
-        if volume_fourhour < 500000.0:
+        if volume_fourhour < 100000.0:
             valid = False
             logger.debug(f"{symbol} excluded based on low coin trading volume {volume_fourhour / 1000000}M")
 
