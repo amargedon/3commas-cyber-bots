@@ -11,10 +11,16 @@ from helpers.database import (
     get_next_process_time,
     set_next_process_time
 )
-from helpers.datasources import (
-    get_botassist_data,
-    get_coingecko_data,
-    get_coinmarketcap_data,
+from helpers.datasources_botassist import (
+    get_botassist_data
+)
+from helpers.datasources_coingecko import (
+    get_coingecko_data
+)
+from helpers.datasources_coinmarketcap import (
+    get_coinmarketcap_data
+)
+from helpers.datasources_lunarcrush import (
     get_lunarcrush_data
 )
 from helpers.logging import (

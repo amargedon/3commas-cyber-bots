@@ -8,7 +8,7 @@ import sys
 import time
 from pathlib import Path
 
-from helpers.datasources import (
+from helpers.datasources_lunarcrush import (
     get_lunarcrush_data
 )
 from helpers.logging import Logger, NotificationHandler

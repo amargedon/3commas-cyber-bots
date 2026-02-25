@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from helpers.database import get_next_process_time, set_next_process_time
 
-from helpers.datasources import (
+from helpers.datasources_coinmarketcap import (
     get_coinmarketcap_data
 )
 from helpers.logging import Logger, NotificationHandler

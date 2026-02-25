@@ -8,7 +8,7 @@ import sys
 import time
 from pathlib import Path
 
-from helpers.datasources import (
+from helpers.datasources_botassist import (
     get_botassist_data
 )
 from helpers.logging import Logger, NotificationHandler
