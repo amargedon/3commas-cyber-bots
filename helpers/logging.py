@@ -13,6 +13,8 @@ from apprise import NotifyFormat
 class NotificationHandler:
     """Notification class."""
 
+    TELEGRAM_MESSAGE_LIMIT = 4096
+
     def __init__(self, program, enabled=False, notify_urls=None):
         self.program = program
         self.message = ""
@@ -27,6 +29,44 @@ class NotificationHandler:
             self.enabled = True
         else:
             self.enabled = False
+
+    def split_message(self, message, max_length=None):
+        """Split a long message into Telegram-safe chunks."""
+        if max_length is None:
+            max_length = self.TELEGRAM_MESSAGE_LIMIT
+
+        if not message or len(message) <= max_length:
+            return [message]
+
+        chunks = []
+        current = ""
+
+        for line in message.splitlines(True):
+            candidate = current + line
+            if len(candidate) <= max_length:
+                current = candidate
+                continue
+
+            if current:
+                chunks.append(current.rstrip())
+                current = ""
+
+            if len(line) <= max_length:
+                current = line
+            else:
+                # Split a single long line without breaking words if possible.
+                while len(line) > max_length:
+                    split_at = line.rfind(" ", 0, max_length)
+                    if split_at <= 0:
+                        split_at = max_length
+                    chunks.append(line[:split_at].rstrip())
+                    line = line[split_at:].lstrip()
+                current = line
+
+        if current:
+            chunks.append(current.rstrip())
+
+        return [chunk for chunk in chunks if chunk]
 
     def start_worker(self):
         """Start notification worker."""
@@ -51,8 +91,14 @@ class NotificationHandler:
     def send_notification(self):
         """Send the notification messages if there are any."""
         if self.enabled and self.message:
-            msg = f"[3C Cyber Bot-Helper {self.program}]\r\n \r\n" + self.message
-            self.queue.put((msg, []))
+            header = f"[3C Cyber Bot-Helper {self.program}]\r\n \r\n"
+            payload = self.message.rstrip()
+            chunks = self.split_message(payload, self.TELEGRAM_MESSAGE_LIMIT - len(header))
+
+            for idx, chunk in enumerate(chunks):
+                msg = header + chunk if idx == 0 else chunk
+                self.queue.put((msg, []))
+
             self.message = ""
 
 

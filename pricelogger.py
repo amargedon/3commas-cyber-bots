@@ -3,7 +3,7 @@
 import argparse
 import configparser
 import csv
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from math import fabs
 import os
 import requests
@@ -436,6 +436,111 @@ def is_candle_closed(timeframe: str) -> bool:
     raise ValueError(f"Invalid timeframe '{timeframe}' for candle close check.")
 
 
+def process_daily_prices(symbols: list, currency: str):
+    """Fetch current prices and compare them to the previous daily snapshot."""
+
+    filename = f"daily_prices_{currency}.csv"
+    last_run_file = f"daily_prices_{currency}_last_run.txt"
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    if os.path.exists(f"{datadir}/{last_run_file}"):
+        with open(f"{datadir}/{last_run_file}", "r", encoding="utf-8") as f:
+            last_processed = (f.read().strip() or None)
+        if last_processed == today:
+            logger.debug(f"Daily price overview for {currency} already processed today, skipping.")
+            return
+
+    section_data = []
+
+    for symbol in symbols:
+        try:
+            currentprice = 0.0
+            source = "none"
+            if f"{symbol}-{currency}" in markets:
+                currentprice = get_current_price(symbol, currency)
+                source = "Bitvavo"
+            else:
+                logger.warning(f"Symbol '{symbol}' not found in Bitvavo markets, fetching current price from CoinMarketCap as fallback.", False)
+                currentprice = get_coinmarketcap_price(logger, config.get("settings", "cmc-apikey"), symbol, currency)
+                source = "CoinMarketCap"
+
+            if "e" in str(currentprice):
+                currentprice = f"{currentprice:.12f}"
+            logger.info(f"Current price for {symbol}: {currentprice} (Price source: {source})")
+
+            section_data.append({
+                "symbol": symbol,
+                "current_price": currentprice,
+                "close_price": currentprice,
+                "average_bought_percentage_change": 0.0
+            })
+        except Exception as e:
+            logger.error(f"Error fetching current price for {symbol}: {e}")
+            section_data.append({
+                "symbol": symbol,
+                "current_price": 0.0,
+                "close_price": 0.0,
+                "average_bought_percentage_change": 0.0
+            })
+
+    if not section_data:
+        logger.warning("No daily price data fetched for any symbols, skipping the daily change calculation.")
+        return
+
+    section_data.sort(key=lambda x: x["symbol"])
+
+    last_prices = {}
+
+    if os.path.exists(f"{datadir}/{filename}"):
+        with open(f"{datadir}/{filename}", newline="") as f:
+            reader = csv.reader(f, delimiter=';')
+            for row in reader:
+                if not row or row[0] in ("sep=", "symbol"):
+                    continue
+
+                symbol = row[0]
+                try:
+                    last_prices[symbol] = parse_price(row[1])
+                except (ValueError, IndexError):
+                    logger.warning(f"Skipping invalid daily price data for '{symbol}' in '{datadir}/{filename}'", False)
+
+    daily_changes = []
+    for item in section_data:
+        symbol = item["symbol"]
+        current_price = float(item["current_price"])
+
+        if symbol in last_prices and last_prices[symbol] > 0:
+            last_price = last_prices[symbol]
+            price_change = ((current_price - last_price) / last_price) * 100
+            daily_changes.append((symbol, price_change, last_price, current_price))
+
+    logger.info("1d price changes above 1% since last day: ", True)
+    daily_changes.sort(key=lambda x: x[1], reverse=True)
+    for symbol, price_change, last_price, current_price in daily_changes:
+        if abs(price_change) >= 1.0:
+            logger.info(
+                f"Daily price change for {symbol}: "
+                f"{price_change:.2f}% "
+                f"({last_price:.6f} -> {current_price:.6f})",
+                True
+            )
+
+    with open(f"{datadir}/{filename}", "w", newline="") as f:
+        writer = csv.writer(f, delimiter=';')
+        f.write("sep=;\n")
+        writer.writerow(["symbol", "current_price", "close_price", "average_bought_percentage_change"])
+
+        for item in section_data:
+            writer.writerow([
+                item["symbol"],
+                format_price(item["current_price"]),
+                format_price(item["close_price"]),
+                item["average_bought_percentage_change"]
+            ])
+
+    with open(f"{datadir}/{last_run_file}", "w", encoding="utf-8") as f:
+        f.write(today)
+
 # Start application
 program = Path(__file__).stem
 
@@ -498,10 +603,7 @@ while True:
     logger.info(f"Reloaded configuration from '{datadir}/{program}.ini'")
 
     # Configuration settings
-    timeint = int(config.get("settings", "timeinterval"))
-
-    # Current time
-    starttime = int(time.time())
+    # The price logger intentionally runs on an hourly cadence so 1h/4h/1d candles are evaluated after the full hour closes.
 
     markets = get_bitvavo_markets(logger)
 
@@ -518,11 +620,15 @@ while True:
             symbols = json.loads(config.get(section, "symbols"))
             currency = config.get(section, "currency")
 
-            # Fetch montly prices for the previous month if the current day is the first of the month to capture the monthly candle close price
+            # Fetch monthly prices for the previous month if the current day is the first of the month to capture the monthly candle close price
             previous_month = time.localtime().tm_mon - 1 or 12
             previous_year = time.localtime().tm_year if previous_month != 12 else time.localtime().tm_year - 1
             month_name = time.strftime("%B", time.strptime(str(previous_month), "%m"))
             process_monthly_prices(symbols, currency, month_name, previous_year)
+
+            if is_candle_closed("1d"):
+                logger.debug("Current daily candle is closed, processing daily price overview.")
+                process_daily_prices(symbols, currency)
 
             timeframe = config.get(section, "timeframe-latest-candle")
             if not is_candle_closed(timeframe):
@@ -537,11 +643,12 @@ while True:
             )
 
     # Create time object for 5 minutes past next hour
-    next_hour = time.localtime().tm_hour
-    next_run = time.mktime((time.localtime().tm_year, time.localtime().tm_mon, time.localtime().tm_mday, next_hour, 5, 0, 0, 0, 0))
+    now = datetime.now()
+    next_run = now.replace(minute=5, second=0, microsecond=0)
+    if next_run <= now:
+        next_run += timedelta(hours=1)
 
-    # Calculate sleep time from now till next run time
-    wait_time = int(next_run - time.time())
+    wait_time = (next_run - now).total_seconds()
 
-    if not wait_time_interval(logger, notification, wait_time, False):
+    if not wait_time_interval(logger, notification, int(wait_time), False):
         break
