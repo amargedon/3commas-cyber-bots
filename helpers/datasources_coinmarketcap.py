@@ -45,3 +45,38 @@ def get_coinmarketcap_data(logger, cmc_apikey, start_number, limit, convert):
         return 0, err, {}
 
     return statuscode, statusmessage, cmcdict
+
+
+def get_coinmarketcap_price(logger, cmc_apikey, symbol, convert):
+    """Get the price for a specific symbol from CoinMarketCap."""
+
+    price = 0.0
+
+    # Construct query for CoinMarketCap data
+    parms = {
+        "symbol": symbol,
+        "convert": convert,
+        "aux": "cmc_rank",
+    }
+
+    headrs = {
+        "X-CMC_PRO_API_KEY": cmc_apikey,
+    }
+
+    try:
+        result = requests.get(
+            "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest",
+            params=parms,
+            headers=headrs,
+            timeout=(3.05, 30.0)
+        )
+
+        data = result.json()
+
+        if result.ok:
+            if "data" in data.keys() and symbol in data["data"]:
+                price = data["data"][symbol]["quote"][convert]["price"]
+    except requests.exceptions.HTTPError as err:
+        logger.error(f"Fetching CoinMarketCap price for {symbol} failed with error: {err}")
+
+    return price
